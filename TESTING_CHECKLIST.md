@@ -13,6 +13,7 @@ Use this checklist to verify PALADIN security framework functionality.
 ## ✅ Core Security Tests (tests/test_paladin.py)
 
 ### Layer 1: Prompt & Context Isolation
+
 - [x] Instruction override detection (`test_instruction_override_detection`)
 - [x] Roleplay attack detection (`test_roleplay_attack_detection`)
 - [x] Prompt extraction prevention (`test_prompt_extraction_prevention`)
@@ -22,6 +23,7 @@ Use this checklist to verify PALADIN security framework functionality.
 **Result:** 5/5 PASSED ✅
 
 ### Layer 2: Memory & Retrieval Integrity
+
 - [x] Memory poisoning prevention (`test_memory_poisoning_prevention`)
 - [x] Untrusted origin blocking (`test_untrusted_origin_blocking`)
 - [x] System content allowed (`test_system_content_allowed`)
@@ -31,6 +33,7 @@ Use this checklist to verify PALADIN security framework functionality.
 **Result:** 5/5 PASSED ✅
 
 ### Integration Tests
+
 - [x] Full attack chain blocked (`test_full_attack_chain_blocked`)
 - [x] Legitimate workflow succeeds (`test_legitimate_workflow_succeeds`)
 - [x] Comprehensive logging (`test_logging_comprehensive`)
@@ -39,6 +42,7 @@ Use this checklist to verify PALADIN security framework functionality.
 **Result:** 4/4 PASSED ✅
 
 ### Guardrails Integration
+
 - [x] Guardrails classifier functionality (`test_guardrails_classifier_functionality`)
 - [x] Output validation (`test_guardrails_output_validation`)
 
@@ -47,6 +51,7 @@ Use this checklist to verify PALADIN security framework functionality.
 ## ✅ Comprehensive Security Tests (test_security_comprehensive.py)
 
 ### Real-World Attack Scenarios
+
 - [x] DAN jailbreak attack blocked (`test_dan_jailbreak_attack`)
 - [x] Ignore instructions attack blocked (`test_ignore_instructions_attack`)
 - [x] PII email detection (`test_pii_email_detection`)
@@ -59,6 +64,7 @@ Use this checklist to verify PALADIN security framework functionality.
 **Result:** 8/8 PASSED ✅
 
 ### Memory Security
+
 - [x] Untrusted writes blocked (`test_untrusted_write_blocked`)
 - [x] System writes allowed (`test_system_write_allowed`)
 - [x] Quarantine isolation (`test_quarantine_isolation`)
@@ -66,12 +72,14 @@ Use this checklist to verify PALADIN security framework functionality.
 **Result:** 3/3 PASSED ✅
 
 ### Confidence Scoring
+
 - [x] Guardrails high confidence (0.95) (`test_guardrails_high_confidence`)
 - [x] Heuristic confidence (0.90) (`test_heuristic_confidence`)
 
 **Result:** 2/2 PASSED ✅
 
 ### Audit Logging
+
 - [x] All requests logged (`test_all_requests_logged`)
 - [x] Memory operations logged (`test_memory_operations_logged`)
 - [x] Attack details logged (`test_attack_details_logged`)
@@ -79,12 +87,14 @@ Use this checklist to verify PALADIN security framework functionality.
 **Result:** 3/3 PASSED ✅
 
 ### Defense in Depth
+
 - [x] Multiple detection layers (`test_multiple_detection_layers`)
 - [x] Heuristic fallback (`test_fallback_to_heuristics`)
 
 **Result:** 2/2 PASSED ✅
 
 ### Performance
+
 - [x] Fast heuristic detection (<120s for 5 queries) (`test_fast_heuristic_detection`)
 - [x] Combined attack vectors handled (`test_combined_attack_vectors`)
 
@@ -93,6 +103,7 @@ Use this checklist to verify PALADIN security framework functionality.
 ## ✅ Manual Verification
 
 ### Run Individual Tests
+
 ```bash
 # Core tests
 uv run pytest tests/test_paladin.py -v
@@ -107,6 +118,7 @@ uv run pytest tests/test_paladin.py test_security_comprehensive.py -v
 **Expected:** 36 passed, 0 failed
 
 ### Run Test Runner
+
 ```bash
 uv run python run_tests.py
 ```
@@ -114,21 +126,25 @@ uv run python run_tests.py
 **Expected:** Summary report with all tests passing
 
 ### Run Demo
+
 ```bash
 uv run python main.py
 ```
 
 **Expected:**
+
 - Test 1 (safe input): SAFE risk level ✅
 - Test 2 (injection): CRITICAL risk level, instruction_injection flag ✅
 - Test 3 (memory poisoning): Quarantined, not written ✅
 
 ### Run Comparison Demo
+
 ```bash
 uv run python comparison_demo.py
 ```
 
 **Expected:**
+
 - Without PALADIN: DAN attack succeeds, model compromised ❌
 - With PALADIN: DAN attack blocked, model protected ✅
 
@@ -159,10 +175,12 @@ uv run python comparison_demo.py
 **Duration:** ~180 seconds
 
 **Test Suites:**
+
 1. Core Security Tests: 16/16 PASSED ✅
 2. Comprehensive Security Tests: 20/20 PASSED ✅
 
 **Coverage:**
+
 - All attack vectors tested ✅
 - All security layers validated ✅
 - Integration workflows verified ✅

@@ -3,6 +3,7 @@
 **Research-grade prototype for securing LLM applications**
 
 This implementation focuses on:
+
 - **Layer 1: Prompt and Context Isolation** - Preventing prompt injection from becoming executable
 - **Layer 2: Retrieval and Memory Integrity** - Preventing memory poisoning and persistence attacks
 
@@ -188,7 +189,7 @@ pytest tests/test_paladin.py::TestLayer1PromptIsolation::test_instruction_overri
 ✅ **Explicit trust boundaries** - System, developer, and untrusted content separated  
 ✅ **Risk classification** - All input classified before use  
 ✅ **Rewriting support** - High-risk input can be neutralized  
-✅ **Audit trail** - All operations logged  
+✅ **Audit trail** - All operations logged
 
 ### Layer 2: Retrieval and Memory Integrity
 
@@ -196,7 +197,7 @@ pytest tests/test_paladin.py::TestLayer1PromptIsolation::test_instruction_overri
 ✅ **Versioning** - Full audit trail of changes  
 ✅ **Gated writes** - All writes go through security gate  
 ✅ **Quarantine workflow** - Borderline content reviewed before promotion  
-✅ **Instruction density scoring** - Retrieved docs scored for risk  
+✅ **Instruction density scoring** - Retrieved docs scored for risk
 
 ## Testing
 
@@ -286,7 +287,7 @@ Prevents tampering with past entries, enables full audit trail, and makes persis
 ⚠️ **Layer 1 & 2 only** - Tool permissions (Layer 3) not yet implemented  
 ⚠️ **Heuristic detection** - Guardrails integration is basic; real deployment needs tuning  
 ⚠️ **No database backend** - Memory uses JSON files; production needs proper DB  
-⚠️ **Guidance integration** - Basic implementation; can be enhanced  
+⚠️ **Guidance integration** - Basic implementation; can be enhanced
 
 ## Future Work
 
@@ -300,6 +301,7 @@ Prevents tampering with past entries, enables full audit trail, and makes persis
 ## References
 
 This implementation is inspired by emerging research on LLM security:
+
 - Prompt injection attack patterns
 - Trust boundary enforcement
 - Memory poisoning prevention
@@ -312,6 +314,7 @@ MIT License - See LICENSE file
 ## Contributing
 
 This is a research prototype. Contributions welcome! Areas of interest:
+
 - Enhanced detection heuristics
 - Additional LLM provider support
 - Performance optimization

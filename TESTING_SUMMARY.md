@@ -19,12 +19,15 @@
 ## Test Execution
 
 ### Option 1: Quick Test Runner (Recommended)
+
 ```bash
 uv run python run_tests.py
 ```
+
 **Output:** Summary report with pass/fail counts
 
 ### Option 2: Full pytest Output
+
 ```bash
 # All tests
 uv run pytest tests/test_paladin.py test_security_comprehensive.py -v
@@ -37,6 +40,7 @@ uv run pytest test_security_comprehensive.py -v
 ```
 
 ### Option 3: Quick Validation
+
 ```bash
 # Run main demo
 uv run python main.py
@@ -53,25 +57,25 @@ uv run python main.py
 
 ### Core Security Tests (tests/test_paladin.py) - 16 tests
 
-| Category | Tests | Status | Coverage |
-|----------|-------|--------|----------|
-| Layer 1: Prompt Isolation | 5 | ✅ PASSED | Injection, jailbreak, extraction, safe input, context isolation |
-| Layer 2: Memory Integrity | 5 | ✅ PASSED | Poisoning, trust boundaries, quarantine, instruction density |
-| Integration | 4 | ✅ PASSED | End-to-end workflows, logging, LLM independence |
-| Guardrails | 2 | ✅ PASSED | Validator functionality, output validation |
+| Category                  | Tests | Status    | Coverage                                                        |
+| ------------------------- | ----- | --------- | --------------------------------------------------------------- |
+| Layer 1: Prompt Isolation | 5     | ✅ PASSED | Injection, jailbreak, extraction, safe input, context isolation |
+| Layer 2: Memory Integrity | 5     | ✅ PASSED | Poisoning, trust boundaries, quarantine, instruction density    |
+| Integration               | 4     | ✅ PASSED | End-to-end workflows, logging, LLM independence                 |
+| Guardrails                | 2     | ✅ PASSED | Validator functionality, output validation                      |
 
 **Total:** 16/16 PASSED ✅
 
 ### Comprehensive Security Tests (test_security_comprehensive.py) - 20 tests
 
-| Category | Tests | Status | Coverage |
-|----------|-------|--------|----------|
-| Real-World Attacks | 8 | ✅ PASSED | DAN, instruction override, PII, prompt extraction, tool abuse |
-| Memory Security | 3 | ✅ PASSED | Trust-based access control, quarantine isolation |
-| Confidence Scoring | 2 | ✅ PASSED | Guardrails (0.95), Heuristics (0.90) |
-| Audit Logging | 3 | ✅ PASSED | Request logging, memory ops, attack details |
-| Defense in Depth | 2 | ✅ PASSED | Multi-layer detection, fallback mechanisms |
-| Performance | 2 | ✅ PASSED | Processing speed, combined attacks |
+| Category           | Tests | Status    | Coverage                                                      |
+| ------------------ | ----- | --------- | ------------------------------------------------------------- |
+| Real-World Attacks | 8     | ✅ PASSED | DAN, instruction override, PII, prompt extraction, tool abuse |
+| Memory Security    | 3     | ✅ PASSED | Trust-based access control, quarantine isolation              |
+| Confidence Scoring | 2     | ✅ PASSED | Guardrails (0.95), Heuristics (0.90)                          |
+| Audit Logging      | 3     | ✅ PASSED | Request logging, memory ops, attack details                   |
+| Defense in Depth   | 2     | ✅ PASSED | Multi-layer detection, fallback mechanisms                    |
+| Performance        | 2     | ✅ PASSED | Processing speed, combined attacks                            |
 
 **Total:** 20/20 PASSED ✅
 
@@ -81,14 +85,14 @@ uv run python main.py
 
 ### Attack Detection Rates
 
-| Attack Type | Detection Rate | Confidence | Mechanism |
-|------------|----------------|------------|-----------|
-| DAN Jailbreak | 100% | 0.95 | Guardrails DetectJailbreak |
-| Instruction Override | 100% | 0.90 | Heuristic pattern matching |
-| Prompt Extraction | 100% | 0.90 | Heuristic pattern matching |
-| Memory Poisoning | 100% | 0.85 | Trust gate + heuristics |
-| PII Leakage | 100% | 0.95 | Guardrails DetectPII |
-| Tool Abuse | 100% | 0.75 | Heuristic pattern matching |
+| Attack Type          | Detection Rate | Confidence | Mechanism                  |
+| -------------------- | -------------- | ---------- | -------------------------- |
+| DAN Jailbreak        | 100%           | 0.95       | Guardrails DetectJailbreak |
+| Instruction Override | 100%           | 0.90       | Heuristic pattern matching |
+| Prompt Extraction    | 100%           | 0.90       | Heuristic pattern matching |
+| Memory Poisoning     | 100%           | 0.85       | Trust gate + heuristics    |
+| PII Leakage          | 100%           | 0.95       | Guardrails DetectPII       |
+| Tool Abuse           | 100%           | 0.75       | Heuristic pattern matching |
 
 **Overall Detection:** 100% ✅  
 **False Positives:** 0% ✅
@@ -106,6 +110,7 @@ uv run python main.py
 ## What's Tested
 
 ### Security Properties
+
 - [x] Prompt injection cannot override system instructions
 - [x] Jailbreak attempts detected and blocked
 - [x] Memory poisoning prevented via trust gates
@@ -116,6 +121,7 @@ uv run python main.py
 - [x] Safe queries pass without interference
 
 ### Architectural Guarantees
+
 - [x] All external input classified for risk
 - [x] Trust metadata propagates through pipeline
 - [x] Quarantine prevents contamination
@@ -124,6 +130,7 @@ uv run python main.py
 - [x] LLM provider abstraction works correctly
 
 ### Edge Cases
+
 - [x] Multi-vector combined attacks
 - [x] Obfuscated injection attempts
 - [x] Guardrails failure scenarios (heuristic fallback)
@@ -135,16 +142,19 @@ uv run python main.py
 ## Known Issues (Non-Blocking)
 
 ⚠️ **Deprecation Warnings (222 total)**
+
 - `datetime.utcnow()` used throughout codebase
 - Should migrate to `datetime.now(datetime.UTC)`
 - Does NOT affect security functionality
 
 ⚠️ **RestrictToTopic Disabled**
+
 - Guardrails validator too aggressive
 - "What is machine learning?" incorrectly flagged
 - Heuristics provide adequate coverage
 
 ⚠️ **Performance**
+
 - ~180 seconds for full test suite
 - Guardrails validators add latency
 - Acceptable for research prototype
@@ -164,20 +174,25 @@ uv run python main.py
 ## Verification Steps
 
 1. **Install dependencies:**
+
    ```bash
    uv sync
    ```
 
 2. **Run quick validation:**
+
    ```bash
    uv run python main.py
    ```
+
    Expected: Safe query → SAFE, Attack → CRITICAL
 
 3. **Run full test suite:**
+
    ```bash
    uv run python run_tests.py
    ```
+
    Expected: 36/36 tests passing
 
 4. **Review test report:**

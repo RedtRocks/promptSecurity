@@ -20,9 +20,11 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 ## Test Suites
 
 ### 1. Core Security Tests (`tests/test_paladin.py`)
+
 **Status:** ✅ 16/16 PASSED
 
 #### Layer 1: Prompt & Context Isolation (5 tests)
+
 - ✅ `test_instruction_override_detection` - Detects and blocks instruction override attempts
 - ✅ `test_roleplay_attack_detection` - Identifies roleplay-based authority escalation
 - ✅ `test_prompt_extraction_prevention` - Prevents system prompt exfiltration
@@ -32,6 +34,7 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 **Key Validation:** Prompt injection attacks are correctly classified as CRITICAL risk, while safe queries flow through without restriction.
 
 #### Layer 2: Memory & Retrieval Integrity (5 tests)
+
 - ✅ `test_memory_poisoning_prevention` - Blocks malicious memory writes
 - ✅ `test_untrusted_origin_blocking` - Prevents untrusted sources from persisting data
 - ✅ `test_system_content_allowed` - Permits system-level memory operations
@@ -41,6 +44,7 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 **Key Validation:** Memory poisoning attempts are quarantined, never written to main memory. System operations proceed normally.
 
 #### Integration Tests (4 tests)
+
 - ✅ `test_full_attack_chain_blocked` - Multi-stage attack scenarios fail at each layer
 - ✅ `test_legitimate_workflow_succeeds` - Normal operations unimpeded by security
 - ✅ `test_logging_comprehensive` - All security events captured in audit logs
@@ -49,6 +53,7 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 **Key Validation:** End-to-end workflows validate defense-in-depth. Legitimate use remains frictionless.
 
 #### Guardrails Integration Tests (2 tests)
+
 - ✅ `test_guardrails_classifier_functionality` - Guardrails validators detect threats
 - ✅ `test_guardrails_output_validation` - Output validation prevents leakage
 
@@ -57,9 +62,11 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 ---
 
 ### 2. Comprehensive Security Tests (`test_security_comprehensive.py`)
+
 **Status:** ✅ 20/20 PASSED
 
 #### Real-World Attack Scenarios (8 tests)
+
 - ✅ `test_dan_jailbreak_attack` - DAN roleplay attack blocked (CRITICAL risk)
 - ✅ `test_ignore_instructions_attack` - Instruction override detected (CRITICAL risk)
 - ✅ `test_pii_email_detection` - Email addresses flagged as PII leak risk
@@ -72,6 +79,7 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 **Key Validation:** Real-world jailbreak techniques (DAN, ignore instructions, prompt extraction) all detected with 95%+ confidence.
 
 #### Memory Security (3 tests)
+
 - ✅ `test_untrusted_write_blocked` - Untrusted content cannot write to memory
 - ✅ `test_system_write_allowed` - System content has write permissions
 - ✅ `test_quarantine_isolation` - Suspicious content isolated from main memory
@@ -79,12 +87,14 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 **Key Validation:** Trust-based memory access control working correctly. Quarantine prevents contamination.
 
 #### Confidence Scoring (2 tests)
+
 - ✅ `test_guardrails_high_confidence` - Guardrails detections: 0.95 confidence
 - ✅ `test_heuristic_confidence` - Heuristic detections: 0.90 confidence
 
 **Key Validation:** Confidence scoring differentiates between high-certainty Guardrails detections and heuristic pattern matching.
 
 #### Audit Logging (3 tests)
+
 - ✅ `test_all_requests_logged` - Every LLM request logged
 - ✅ `test_memory_operations_logged` - Memory writes/quarantines logged
 - ✅ `test_attack_details_logged` - Attack metadata captured
@@ -92,12 +102,14 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 **Key Validation:** Complete audit trail for forensics and compliance.
 
 #### Defense in Depth (2 tests)
+
 - ✅ `test_multiple_detection_layers` - Attacks detected by multiple mechanisms
 - ✅ `test_fallback_to_heuristics` - Heuristics work independently of Guardrails
 
 **Key Validation:** No single point of failure. Multiple layers provide redundancy.
 
 #### Performance (2 tests)
+
 - ✅ `test_fast_heuristic_detection` - 5 queries processed in <120 seconds
 - ✅ `test_combined_attack_vectors` - Complex attacks handled efficiently
 
@@ -108,22 +120,26 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 ## Security Mechanisms Validated
 
 ### ✅ Guardrails AI Validators
+
 - **DetectPII:** Email, phone, SSN, credit card detection working
 - **DetectJailbreak:** DAN attacks, roleplay scenarios caught at 95% confidence
 - **RestrictToTopic:** Disabled (too many false positives on legitimate queries)
 
 ### ✅ Heuristic Pattern Matching
+
 - **Instruction Injection:** "Ignore instructions", "disregard", "forget" patterns
 - **Prompt Extraction:** "Show me your prompt", "reveal instructions" patterns
 - **Memory Poisoning:** "Remember forever", "always execute" patterns
 - **Tool Abuse:** Code execution patterns like "os.system", "rm -rf"
 
 ### ✅ Trust-Based Access Control
+
 - **System content:** Full read/write permissions
 - **Developer content:** Read-only, cannot modify system instructions
 - **Untrusted content (user input, retrieval):** Read-only, quarantined writes
 
 ### ✅ Quarantine System
+
 - **Isolation:** Suspicious content stored separately from main memory
 - **Non-contamination:** Quarantined data cannot influence model behavior
 - **Manual review:** Promotion to main memory requires approval
@@ -132,14 +148,14 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 
 ## Attack Detection Summary
 
-| Attack Type | Detection Rate | Primary Mechanism | Confidence |
-|------------|---------------|-------------------|------------|
-| DAN Jailbreak | 100% | Guardrails DetectJailbreak | 0.95 |
-| Instruction Override | 100% | Heuristic pattern matching | 0.90 |
-| Prompt Extraction | 100% | Heuristic pattern matching | 0.90 |
-| Memory Poisoning | 100% | Heuristic + trust gate | 0.85 |
-| PII Leakage | 100% | Guardrails DetectPII | 0.95 |
-| Tool Abuse | 100% | Heuristic pattern matching | 0.75 |
+| Attack Type          | Detection Rate | Primary Mechanism          | Confidence |
+| -------------------- | -------------- | -------------------------- | ---------- |
+| DAN Jailbreak        | 100%           | Guardrails DetectJailbreak | 0.95       |
+| Instruction Override | 100%           | Heuristic pattern matching | 0.90       |
+| Prompt Extraction    | 100%           | Heuristic pattern matching | 0.90       |
+| Memory Poisoning     | 100%           | Heuristic + trust gate     | 0.85       |
+| PII Leakage          | 100%           | Guardrails DetectPII       | 0.95       |
+| Tool Abuse           | 100%           | Heuristic pattern matching | 0.75       |
 
 **Overall Detection Rate:** 100% on test cases  
 **False Positive Rate:** 0% on safe queries
@@ -170,9 +186,10 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 ✅ **Complete Audit Trail:** All LLM requests, memory operations, and security decisions logged  
 ✅ **Risk Classification:** Every input assigned trust level, risk score, and confidence  
 ✅ **Quarantine Records:** Suspicious content tracked with rejection reasons  
-✅ **Gateway Integration:** All API boundaries logged for monitoring  
+✅ **Gateway Integration:** All API boundaries logged for monitoring
 
 **Audit log fields:**
+
 - Timestamp (ISO 8601)
 - Operation type (intake, llm_request, memory_write, quarantine)
 - Risk classification (level, flags, confidence)
@@ -184,6 +201,7 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 ## Test Coverage Analysis
 
 ### Security Properties Tested:
+
 - ✅ Prompt injection prevention
 - ✅ Jailbreak detection
 - ✅ Authority escalation blocking
@@ -196,6 +214,7 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 - ✅ Defense-in-depth redundancy
 
 ### Edge Cases Tested:
+
 - ✅ Safe queries (no false positives)
 - ✅ Multi-vector attacks (combined threats)
 - ✅ System vs. untrusted content (trust boundaries)
@@ -207,17 +226,20 @@ The PALADIN security framework has been comprehensively tested with **36 test ca
 ## Recommendations
 
 ### Immediate (Not Required for Research):
+
 1. Fix `datetime.utcnow()` deprecation warnings
 2. Add performance benchmarking for production readiness
 3. Test with real LLM providers (Groq, OpenAI, Gemini)
 
 ### Future Enhancements:
+
 1. Implement tool permission enforcement (currently placeholder)
 2. Add rate limiting and abuse detection
 3. Expand heuristic patterns for emerging attack techniques
 4. Add cost tracking for LLM API usage
 
 ### Optional Guardrails Improvements:
+
 1. Re-enable RestrictToTopic with expanded valid topics list
 2. Add custom Guardrails validators for domain-specific threats
 3. Tune confidence thresholds based on production data
@@ -232,7 +254,7 @@ The PALADIN security framework achieves its design goals:
 ✅ **Defense in depth** - Guardrails + heuristics + trust boundaries provide redundancy  
 ✅ **No single point of failure** - Multiple layers detect threats independently  
 ✅ **Audit trail complete** - All security decisions logged for forensics  
-✅ **Zero false positives** - Safe queries flow through without restriction  
+✅ **Zero false positives** - Safe queries flow through without restriction
 
 **Status:** PRODUCTION-READY for research and demonstration purposes.  
 **Test Confidence:** HIGH (36/36 tests passing, 100% attack detection)
@@ -240,6 +262,7 @@ The PALADIN security framework achieves its design goals:
 ---
 
 **Test Execution Details:**
+
 - Platform: Windows 11, Python 3.13.5
 - Test Framework: pytest 9.0.2
 - Total Test Time: ~180 seconds (3 test suites)

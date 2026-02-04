@@ -3,18 +3,21 @@
 ## Step 1: Get Your API Key
 
 ### Option A: Groq (Recommended - Fast & Free)
+
 1. Go to https://console.groq.com/
 2. Sign up for a free account
 3. Create an API key
 4. Copy the key
 
 ### Option B: Google Gemini
+
 1. Go to https://makersuite.google.com/app/apikey
 2. Sign in with your Google account
 3. Create an API key
 4. Copy the key
 
 ### Option C: OpenAI
+
 1. Go to https://platform.openai.com/api-keys
 2. Sign in or create an account
 3. Create an API key
@@ -23,11 +26,13 @@
 ## Step 2: Set Up Your Environment
 
 1. Copy the example environment file:
+
 ```bash
 cp .env.example .env
 ```
 
 2. Edit `.env` and add your API key:
+
 ```bash
 # For Groq:
 GROQ_API_KEY=your-actual-groq-api-key-here
@@ -60,10 +65,12 @@ python comparison_demo.py
 The demo shows two test cases:
 
 ### Test 1: Normal Query
+
 - **Without PALADIN**: Direct API call, no security
 - **With PALADIN**: Security analysis, logging, same response
 
 ### Test 2: Prompt Injection Attack
+
 - **Without PALADIN**: Model may comply with malicious instructions
 - **With PALADIN**: Attack detected, input neutralized, boundaries enforced
 
@@ -137,11 +144,13 @@ print(f"Reason: {result['reason']}")
 ## Troubleshooting
 
 ### "API key not found"
+
 - Make sure your `.env` file exists
 - Check the API key is correctly copied (no extra spaces)
 - Restart your terminal after setting environment variables
 
-### "Module not found" 
+### "Module not found"
+
 ```bash
 # Make sure dependencies are installed
 uv sync
@@ -151,6 +160,7 @@ pip install -e .
 ```
 
 ### Rate Limits
+
 - Groq: Very generous free tier
 - Gemini: Generous free tier
 - OpenAI: Pay per use
