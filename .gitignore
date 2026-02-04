@@ -1,0 +1,50 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.pyo
+*.pyd
+build/
+dist/
+wheels/
+*.egg-info
+.eggs/
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+
+# Testing
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+*.cover
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+*.log
+*.tmp
+memory_store.json
+paladin_memory/
+.python-version
+
+# Gateway & Guidance submodules (if not needed)
+# Uncomment if you want to exclude these:
+# gateway/
+# guidance/
