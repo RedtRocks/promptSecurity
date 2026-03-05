@@ -31,6 +31,7 @@ agent-hardener analyze --tool-file tool.yaml --config config.yaml
 ## Output
 
 Results are written to `./output/` (configurable) as:
+
 - `<tool_name>_report.json` — full machine-readable report
 - `<tool_name>_report.html` — interactive dashboard with Chart.js visualisations
 

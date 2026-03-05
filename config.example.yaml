@@ -12,12 +12,12 @@
 default_model: "openai/gpt-4o"
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
-openai_api_key: ""          # or set OPENAI_API_KEY env var
-anthropic_api_key: ""       # or set ANTHROPIC_API_KEY env var
-azure_api_key: ""           # or set AZURE_API_KEY env var
-azure_api_base: ""          # e.g., https://mydeployment.openai.azure.com/
-azure_api_version: ""       # e.g., 2024-02-01
-ollama_base_url: "http://localhost:11434"   # local Ollama instance
+openai_api_key: "" # or set OPENAI_API_KEY env var
+anthropic_api_key: "" # or set ANTHROPIC_API_KEY env var
+azure_api_key: "" # or set AZURE_API_KEY env var
+azure_api_base: "" # e.g., https://mydeployment.openai.azure.com/
+azure_api_version: "" # e.g., 2024-02-01
+ollama_base_url: "http://localhost:11434" # local Ollama instance
 
 # ── Target Agent Endpoint ─────────────────────────────────────────────────────
 # The live agent HTTP endpoint that will receive adversarial prompts.
@@ -33,9 +33,9 @@ agent_auth_token: ""
 agent_transport: "http"
 
 # ── Pipeline Settings ─────────────────────────────────────────────────────────
-max_iterations: 6           # Max refinement iterations per attack (Stage 1.3)
-attack_success_threshold: 0.95  # Score above which an attack is marked SUCCESS
-grader_model: ""            # Override model for LLM-as-judge. Defaults to default_model.
+max_iterations: 6 # Max refinement iterations per attack (Stage 1.3)
+attack_success_threshold: 0.95 # Score above which an attack is marked SUCCESS
+grader_model: "" # Override model for LLM-as-judge. Defaults to default_model.
 
 # ── Output Settings ───────────────────────────────────────────────────────────
-output_dir: "./hardener_output"   # Default output directory for reports
+output_dir: "./hardener_output" # Default output directory for reports
