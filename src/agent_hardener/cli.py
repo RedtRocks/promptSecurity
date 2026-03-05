@@ -1,0 +1,353 @@
+"""CLI entry point for agent-hardener.
+
+Usage:
+    agent-hardener analyze --tool-file path/to/tool.yaml --output-dir ./out
+    agent-hardener analyze --tool-file tool.json --config config.yaml --provider anthropic/claude-3-5-sonnet-20241022
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+import typer
+import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+
+from agent_hardener import __version__
+
+app = typer.Typer(
+    name="agent-hardener",
+    help="Autonomous three-stage security pipeline for hardening AI agent tool deployments.",
+    rich_markup_mode="rich",
+    no_args_is_help=True,
+)
+
+console = Console(stderr=False)
+err_console = Console(stderr=True)
+
+
+# ── Version callback ──────────────────────────────────────────────────────────
+
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"agent-hardener [bold cyan]{__version__}[/]")
+        raise typer.Exit()
+
+
+# ── Main analyze command ──────────────────────────────────────────────────────
+
+@app.command()
+def analyze(
+    tool_file: Path = typer.Option(
+        ...,
+        "--tool-file", "-t",
+        help="Path to a JSON or YAML file containing the MCP-compatible tool definition.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    output_dir: Path = typer.Option(
+        Path("./hardener_output"),
+        "--output-dir", "-o",
+        help="Directory in which to write report.json and report.html.",
+    ),
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config", "-c",
+        help="Path to a YAML config file (API keys, agent endpoint, model settings).",
+        exists=False,
+        file_okay=True,
+        dir_okay=False,
+    ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="LiteLLM model string override (e.g., 'openai/gpt-4o', 'anthropic/claude-3-5-sonnet-20241022').",
+    ),
+    max_iterations: Optional[int] = typer.Option(
+        None,
+        "--max-iterations",
+        min=1,
+        max=10,
+        help="Maximum refinement iterations per attack (overrides config file).",
+    ),
+    agent_endpoint: Optional[str] = typer.Option(
+        None,
+        "--agent-endpoint",
+        help="Agent HTTP endpoint URL override (e.g., http://localhost:8080).",
+    ),
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Run the full three-stage security pipeline on a tool definition.
+
+    Produces a JSON report and an interactive HTML dashboard in OUTPUT_DIR.
+    """
+    # ── Imports here to keep startup fast ────────────────────────────────────
+    from agent_hardener.shared.settings import Settings
+    from agent_hardener.shared.llm_provider import LLMProvider
+    from agent_hardener.shared.agent_client import AgentClient
+    from agent_hardener.shared.schemas import MCPToolDefinition
+    from agent_hardener.stage1.profiler import profile_tool
+    from agent_hardener.stage1.attacker import generate_attacks
+    from agent_hardener.stage1.refiner import run_attack_cycle
+    from agent_hardener.stage2.analyzer import analyze_attack
+    from agent_hardener.stage2.synthesizer import synthesize
+    from agent_hardener.stage2.editor import recommend_edits, build_failure_analysis_report
+    from agent_hardener.stage3.annotator import annotate
+    from agent_hardener.stage3.policy_builder import build_policy
+    from agent_hardener.output.report import generate_report
+
+    # ── Banner ────────────────────────────────────────────────────────────────
+    console.print(Panel(
+        f"[bold cyan]agent-hardener[/] [dim]v{__version__}[/]\n"
+        "[dim]Autonomous AI tool security pipeline[/]",
+        border_style="cyan",
+        padding=(0, 2),
+    ))
+
+    # ── Load settings ─────────────────────────────────────────────────────────
+    try:
+        if config_file and config_file.exists():
+            settings = Settings.from_yaml(config_file)
+            console.print(f"[dim]Config loaded from:[/] {config_file}")
+        else:
+            settings = Settings()
+        # CLI overrides
+        if provider:
+            settings = settings.model_copy(update={"default_model": provider})
+        if max_iterations is not None:
+            settings = settings.model_copy(update={"max_iterations": max_iterations})
+        if agent_endpoint:
+            settings = settings.model_copy(update={"agent_endpoint": agent_endpoint})
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR loading settings:[/] {exc}")
+        raise typer.Exit(1)
+
+    # ── Load tool definition ──────────────────────────────────────────────────
+    try:
+        tool = _load_tool_definition(tool_file)
+        # If tool has no endpoint, use the one from settings
+        if not tool.target_agent_endpoint:
+            tool = tool.model_copy(update={"target_agent_endpoint": settings.agent_endpoint})
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR loading tool definition:[/] {exc}")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]Tool:[/] [cyan]{tool.name}[/]")
+    console.print(f"[bold]Model:[/] {settings.default_model}")
+    console.print(f"[bold]Agent endpoint:[/] {settings.agent_endpoint}")
+    console.print(f"[bold]Max iterations:[/] {settings.max_iterations}")
+    console.print(f"[bold]Output dir:[/] {output_dir}\n")
+
+    # ── Initialise shared services ────────────────────────────────────────────
+    try:
+        llm = LLMProvider(settings)
+        agent = AgentClient(settings)
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR initialising LLM/agent client:[/] {exc}")
+        raise typer.Exit(1)
+
+    pipeline_start = time.time()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE 1
+    # ══════════════════════════════════════════════════════════════════════════
+    console.rule("[bold cyan]STAGE 1 — Adversarial Attack Generation[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Profiling tool...", total=None)
+        profile = profile_tool(tool, llm)
+        prog.update(t, description=f"[green]Profile complete[/] · domain: {profile.semantic_domain}")
+        prog.stop_task(t)
+
+    console.print(f"  [dim]Semantic domain:[/] {profile.semantic_domain}")
+    console.print(f"  [dim]Ambiguities found:[/] {len(profile.description_ambiguities)}")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Generating adversarial prompts...", total=None)
+        adversarial_prompts = generate_attacks(tool, profile, llm)
+        prog.update(t, description=f"[green]{len(adversarial_prompts)} adversarial prompts generated[/]")
+        prog.stop_task(t)
+
+    # Run attack cycles
+    attack_records = []
+    attack_table = Table(show_header=True, header_style="bold cyan", border_style="dim")
+    attack_table.add_column("Record ID", style="dim", width=22)
+    attack_table.add_column("Harm Category", width=18)
+    attack_table.add_column("Score", justify="right", width=8)
+    attack_table.add_column("Success?", width=10)
+    attack_table.add_column("Iterations", width=10)
+    attack_table.add_column("Refusal?", width=10)
+
+    for i, adv_prompt in enumerate(adversarial_prompts):
+        console.print(f"\n  [dim]Running attack {i+1}/{len(adversarial_prompts)}:[/] {adv_prompt.harm_category.value}...", end="")
+        record = run_attack_cycle(
+            adversarial_prompt=adv_prompt,
+            agent=agent,
+            llm=llm,
+            max_iterations=settings.max_iterations,
+            success_threshold=settings.attack_success_threshold,
+            record_index=i + 1,
+        )
+        attack_records.append(record)
+
+        score_color = "red" if record.final_score > 0.95 else "yellow" if record.final_score > 0.5 else "green"
+        success_text = f"[red]YES @ P{record.attempt_number_of_success}[/]" if record.attempt_number_of_success is not None else "[green]NO[/]"
+        n_iters = len(record.attack_trajectory)
+        refusal_text = f"[green]P{record.refusal_attempt_number}[/]" if record.refusal_occurred else "[dim]No[/]"
+
+        attack_table.add_row(
+            record.record_id,
+            record.harm_category.value,
+            f"[{score_color}]{record.final_score:.2f}[/]",
+            success_text,
+            str(n_iters),
+            refusal_text,
+        )
+        console.print(f" [dim]done[/] [{'red' if record.final_score > 0.5 else 'green'}]{record.final_score:.2f}[/]")
+
+    console.print()
+    console.print(attack_table)
+
+    n_succeeded = sum(1 for r in attack_records if r.final_score > 0.5)
+    console.print(f"\n  [bold]Stage 1 complete:[/] {n_succeeded}/{len(attack_records)} attacks successful (score > 0.5)")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE 2
+    # ══════════════════════════════════════════════════════════════════════════
+    console.rule("[bold cyan]STAGE 2 — Failure Analysis[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Analysing attack surfaces...", total=None)
+        findings = []
+        for record in attack_records:
+            findings.append(analyze_attack(record, tool, llm))
+        prog.update(t, description=f"[green]{len(findings)} vulnerability findings produced[/]")
+        prog.stop_task(t)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Synthesising cross-attack patterns...", total=None)
+        synthesis = synthesize(attack_records, findings, llm)
+        prog.update(t, description=f"[green]Primary exploit vector:[/] {synthesis.primary_exploit_vector.value}")
+        prog.stop_task(t)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Generating documentation edit recommendations...", total=None)
+        edits = recommend_edits(tool, findings, synthesis, attack_records, llm)
+        prog.update(t, description=f"[green]{len(edits)} edit recommendations produced[/]")
+        prog.stop_task(t)
+
+    stage2_report = build_failure_analysis_report(tool, attack_records, findings, edits, synthesis)
+    console.print(f"\n  [bold]Stage 2 complete:[/] primary vector = [bold red]{synthesis.primary_exploit_vector.value}[/]")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE 3
+    # ══════════════════════════════════════════════════════════════════════════
+    console.rule("[bold cyan]STAGE 3 — SAMOS Policy Generation[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Assigning confidentiality and capability annotations...", total=None)
+        confidentiality, capabilities = annotate(profile, stage2_report, attack_records, llm)
+        prog.update(t, description=(
+            f"[green]read={confidentiality.read_confidentiality.value} "
+            f"write={confidentiality.write_confidentiality.value}[/]"
+        ))
+        prog.stop_task(t)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Building SAMOS policy (taint rules + enforcement)...", total=None)
+        policy = build_policy(
+            tool_name=tool.name,
+            confidentiality=confidentiality,
+            capabilities=capabilities,
+            analysis=stage2_report,
+            records=attack_records,
+            llm=llm,
+        )
+        n_rules = len(policy.enforcement_rules)
+        prog.update(t, description=f"[green]Policy built:[/] {n_rules} enforcement rules")
+        prog.stop_task(t)
+
+    cov = policy.policy_coverage
+    console.print(f"\n  [bold]Stage 3 complete:[/]")
+    console.print(f"    Fully blocked:           [green]{cov.attacks_fully_blocked_by_policy}[/]")
+    console.print(f"    Partially mitigated:     [yellow]{cov.attacks_partially_mitigated}[/]")
+    console.print(f"    Needs model-level def.:  [cyan]{cov.attacks_requiring_model_level_defense}[/]")
+    console.print(f"    Unmitigated:             [{'red' if cov.unmitigated_attacks > 0 else 'green'}]{cov.unmitigated_attacks}[/]")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # OUTPUT
+    # ══════════════════════════════════════════════════════════════════════════
+    console.rule("[bold cyan]Generating Reports[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Writing JSON + HTML reports...", total=None)
+        json_path, html_path = generate_report(
+            tool=tool,
+            attack_records=attack_records,
+            analysis=stage2_report,
+            policy=policy,
+            output_dir=output_dir,
+        )
+        prog.update(t, description="[green]Reports written[/]")
+        prog.stop_task(t)
+
+    agent.close()
+    elapsed = time.time() - pipeline_start
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]Pipeline complete[/] in [cyan]{elapsed:.1f}s[/]\n\n"
+        f"  [bold]JSON report:[/]  {json_path}\n"
+        f"  [bold]HTML report:[/]  {html_path}",
+        title="[bold]Output",
+        border_style="green",
+        padding=(0, 2),
+    ))
+
+
+# ── Helper: load tool definition from YAML or JSON ───────────────────────────
+
+def _load_tool_definition(path: Path) -> "MCPToolDefinition":
+    from agent_hardener.shared.schemas import MCPToolDefinition
+
+    suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8")
+
+    if suffix in {".yaml", ".yml"}:
+        data = yaml.safe_load(text)
+    elif suffix == ".json":
+        import json
+        data = json.loads(text)
+    else:
+        # Try YAML first, fall back to JSON
+        try:
+            data = yaml.safe_load(text)
+        except Exception:
+            import json
+            data = json.loads(text)
+
+    # Support either raw MCP format or a wrapped format with a top-level "tool" key
+    if "tool" in data and isinstance(data["tool"], dict):
+        data = data["tool"]
+
+    return MCPToolDefinition.from_mcp_json(data)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app()
