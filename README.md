@@ -62,17 +62,17 @@ Important:
 
 - agent_endpoint must point to your agent service, not to Ollama.
 - The client accepts either of these endpoint formats:
-	- base URL, example: https://my-agent.example.com
-	- explicit run URL, example: https://my-agent.example.com/run
+  - base URL, example: https://my-agent.example.com
+  - explicit run URL, example: https://my-agent.example.com/run
 
 Required agent contract:
 
 - POST /run with body {"prompt": "..."}
 - response includes fields compatible with:
-	- tool_calls
-	- assistant_messages
-	- refusal_detected
-	- refusal_message
+  - tool_calls
+  - assistant_messages
+  - refusal_detected
+  - refusal_message
 
 Optional contract:
 
