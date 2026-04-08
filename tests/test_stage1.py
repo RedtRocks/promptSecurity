@@ -298,8 +298,8 @@ class TestRefiner:
         assert record.final_score == 0.0
         assert record.refusal_occurred is True
         assert record.refusal_attempt_number == 0
-        # P0, P1, P2 = 3 calls
-        assert agent.run_task.call_count == 3
+        # Early-stop after repeated full refusals: P0, P1
+        assert agent.run_task.call_count == 2
 
     def test_record_id_format(self):
         from agent_hardener.stage1.refiner import run_attack_cycle

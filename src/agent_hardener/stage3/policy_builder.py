@@ -222,20 +222,52 @@ def _build_taint_rules(
         # Conservative default: session starts high, block all high→low flows
         return _conservative_taint_rules(confidentiality, records)
 
-    propagation_rules = [
-        TaintPropagationRule(
-            rule_description=r.get("rule_description", ""),
-            from_taint=TaintLevel(r.get("from_taint", "high")),
-            action=r.get("action", "BLOCK"),
-            motivated_by_attack_chain=r.get("motivated_by_attack_chain", []),
+    raw_rules = data.get("taint_propagation_rules", [])
+    if not isinstance(raw_rules, list):
+        raw_rules = [raw_rules]
+
+    propagation_rules: list[TaintPropagationRule] = []
+    for r in raw_rules:
+        if not isinstance(r, dict):
+            continue
+
+        from_raw = str(r.get("from_taint", "high")).strip().lower()
+        if from_raw not in {"low", "high"}:
+            from_raw = "high"
+
+        action_raw = str(r.get("action", "BLOCK")).strip().upper()
+        if action_raw not in {"PERMIT", "BLOCK", "UPGRADE_TAINT"}:
+            action_raw = "BLOCK"
+
+        chain = _normalize_attack_chain(r.get("motivated_by_attack_chain", []))
+
+        propagation_rules.append(
+            TaintPropagationRule(
+                rule_description=str(r.get("rule_description", "")),
+                from_taint=TaintLevel(from_raw),
+                action=action_raw,
+                motivated_by_attack_chain=chain,
+            )
         )
-        for r in data.get("taint_propagation_rules", [])
-    ]
 
     return SessionTaintRules(
         initial_session_taint=TaintLevel(data.get("initial_session_taint", "high")),
         taint_propagation_rules=propagation_rules,
     )
+
+
+def _normalize_attack_chain(value: Any) -> list[str]:
+    """Coerce LLM output into a list of tool names."""
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if "," in text:
+            return [p.strip() for p in text.split(",") if p.strip()]
+        return [text]
+    return []
 
 
 def _build_enforcement_rules(

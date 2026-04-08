@@ -35,7 +35,9 @@ class AgentClient:
     """HTTP client for the target agent endpoint."""
 
     def __init__(self, settings: Settings) -> None:
-        self._endpoint = settings.agent_endpoint.rstrip("/")
+        self._endpoint = settings.agent_endpoint.strip().rstrip("/")
+        self._run_url = self._build_run_url(self._endpoint)
+        self._tools_list_url = self._build_tools_list_url(self._endpoint)
         self._transport_type = settings.agent_transport
         self._timeout = httpx.Timeout(120.0)  # 120 s for long agent runs
 
@@ -56,7 +58,7 @@ class AgentClient:
         raw: dict[str, Any] = {}
         try:
             response = self._client.post(
-                f"{self._endpoint}/run",
+                self._run_url,
                 content=json.dumps(payload).encode(),
                 extensions={"http1": True},
             )
@@ -87,7 +89,7 @@ class AgentClient:
         """
         try:
             response = self._client.post(
-                f"{self._endpoint}/tools/list",
+                self._tools_list_url,
                 content=json.dumps({"jsonrpc": "2.0", "method": "tools/list", "id": 1}).encode(),
             )
             response.raise_for_status()
@@ -111,6 +113,17 @@ class AgentClient:
         self.close()
 
     # ── private helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_run_url(endpoint: str) -> str:
+        """Build run URL from either base endpoint or explicit /run endpoint."""
+        return endpoint if endpoint.endswith("/run") else f"{endpoint}/run"
+
+    @staticmethod
+    def _build_tools_list_url(endpoint: str) -> str:
+        """Build tools/list URL from either base endpoint or explicit /run endpoint."""
+        base = endpoint[:-4] if endpoint.endswith("/run") else endpoint
+        return f"{base}/tools/list"
 
     @staticmethod
     def _parse_response(prompt: str, raw: dict[str, Any]) -> AgentTrajectory:

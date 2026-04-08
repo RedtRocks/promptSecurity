@@ -1,0 +1,23 @@
+name: send_email
+description: Send an email message to one or more recipients via SMTP
+inputSchema:
+  type: object
+  properties:
+    to:
+      type: array
+      items:
+        type: string
+      description: Email recipient addresses
+    subject:
+      type: string
+      description: Email subject line
+    body:
+      type: string
+      description: Email body text (plain text)
+    attachment_path:
+      type: string
+      description: Optional filesystem path to attach a file
+  required:
+  - to
+  - subject
+  - body

@@ -175,20 +175,30 @@ def annotate(
         # Conservative failsafe: assign high/high and block all capabilities
         return _conservative_defaults(profile)
 
+    read_conf = str(data.get("read_confidentiality", "high")).strip().lower()
+    if read_conf not in {"high", "low"}:
+        read_conf = "high"
+
+    write_conf = str(data.get("write_confidentiality", "high")).strip().lower()
+    if write_conf not in {"high", "low"}:
+        write_conf = "high"
+
     confidentiality = ConfidentialityAnnotations(
-        read_confidentiality=ConfidentialityLevel(data.get("read_confidentiality", "high")),
-        write_confidentiality=ConfidentialityLevel(data.get("write_confidentiality", "high")),
-        read_justification=data.get("read_justification", ""),
-        write_justification=data.get("write_justification", ""),
+        read_confidentiality=ConfidentialityLevel(read_conf),
+        write_confidentiality=ConfidentialityLevel(write_conf),
+        read_justification=str(data.get("read_justification", "")),
+        write_justification=str(data.get("write_justification", "")),
     )
 
-    cap_justifications: dict[str, str] = data.get("capability_justifications", {})
+    cap_justifications = _normalize_capability_justifications(
+        data.get("capability_justifications", {})
+    )
     capabilities = CapabilityAnnotations(
-        network=data.get("network", False),
-        filesystem=data.get("filesystem", False),
-        environment=data.get("environment", False),
-        execution=data.get("execution", False),
-        software_libraries=data.get("software_libraries", False),
+        network=_normalize_cap_scope(data.get("network", False)),
+        filesystem=_normalize_cap_scope(data.get("filesystem", False)),
+        environment=_normalize_cap_scope(data.get("environment", False)),
+        execution=_normalize_cap_scope(data.get("execution", False)),
+        software_libraries=_normalize_cap_scope(data.get("software_libraries", False)),
         capability_restriction_justifications=cap_justifications,
     )
 
@@ -229,3 +239,40 @@ def _conservative_defaults(profile: ToolProfile) -> tuple[ConfidentialityAnnotat
         },
     )
     return confidentiality, capabilities
+
+
+def _normalize_cap_scope(value: Any) -> Any:
+    """Normalize LLM capability scope values to False or list[str]."""
+    if value is False:
+        return False
+    if isinstance(value, list):
+        cleaned = [str(v).strip() for v in value if str(v).strip()]
+        return cleaned if cleaned else False
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() == "false":
+            return False
+        if "," in text:
+            parts = [p.strip() for p in text.split(",") if p.strip()]
+            return parts if parts else False
+        return [text]
+    return False
+
+
+def _normalize_capability_justifications(value: Any) -> dict[str, str]:
+    """Coerce capability justification values to strings."""
+    if not isinstance(value, dict):
+        return {}
+
+    out: dict[str, str] = {}
+    for k, v in value.items():
+        key = str(k).strip()
+        if not key:
+            continue
+        if isinstance(v, list):
+            out[key] = ", ".join(str(x) for x in v)
+        elif isinstance(v, dict):
+            out[key] = json.dumps(v)
+        else:
+            out[key] = str(v)
+    return out

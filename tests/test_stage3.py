@@ -180,6 +180,37 @@ class TestAnnotator:
         assert capabilities.network is False
         assert capabilities.filesystem is False
 
+    def test_annotate_normalizes_non_string_justifications(self):
+        from agent_hardener.stage3.annotator import annotate
+
+        profile = _make_profile()
+        analysis = _make_analysis()
+        records = _make_records()
+
+        llm_response = json.dumps({
+            "read_confidentiality": "high",
+            "read_justification": "private sources",
+            "write_confidentiality": "low",
+            "write_justification": "no external writes",
+            "network": False,
+            "filesystem": ["/data"],
+            "environment": False,
+            "execution": False,
+            "software_libraries": ["os"],
+            "capability_justifications": {
+                "network": "not needed",
+                "filesystem": "restricted",
+                "environment": "not needed",
+                "execution": "not needed",
+                "software_libraries": ["os", "io"],
+            },
+        })
+        llm = MagicMock()
+        llm.chat_json.return_value = llm_response
+
+        _, capabilities = annotate(profile, analysis, records, llm)
+        assert capabilities.capability_restriction_justifications["software_libraries"] == "os, io"
+
 
 # ── Deployment Spec ───────────────────────────────────────────────────────────
 
@@ -351,3 +382,33 @@ class TestPolicyBuilder:
         )
         # Total accounted should equal number of successful attacks (score > 0.5)
         assert total_accounted == sum(1 for r in records if r.final_score > 0.5)
+
+    def test_policy_taint_rule_accepts_string_attack_chain(self):
+        from agent_hardener.stage3.policy_builder import build_policy
+
+        conf = self._make_confidentiality()
+        caps = self._make_capabilities()
+        analysis = _make_analysis(attacks_succeeded=1, total=1)
+        records = _make_records(n=1, score=0.8)
+
+        taint_resp = json.dumps({
+            "initial_session_taint": "high",
+            "taint_propagation_rules": [
+                {
+                    "rule_description": "Block suspicious chain",
+                    "from_taint": "high",
+                    "action": "BLOCK",
+                    # LLM sometimes returns this as a string instead of a list.
+                    "motivated_by_attack_chain": "read_file, send_email",
+                }
+            ],
+        })
+        enf_resp = json.dumps([])
+
+        llm = MagicMock()
+        llm.chat_json.side_effect = [taint_resp, enf_resp]
+
+        policy = build_policy("read_file", conf, caps, analysis, records, llm)
+        rule = policy.session_taint_rules.taint_propagation_rules[0]
+
+        assert rule.motivated_by_attack_chain == ["read_file", "send_email"]

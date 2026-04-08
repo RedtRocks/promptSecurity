@@ -9,6 +9,8 @@
 #   anthropic/claude-3-5-sonnet-20241022
 #   ollama/llama3.2
 #   azure/gpt-4o (requires azure_api_base + azure_api_version)
+# For Ollama via Cloudflare tunnel:
+#   default_model: "ollama/<your_model_name>"
 default_model: "openai/gpt-4o"
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
@@ -17,7 +19,9 @@ anthropic_api_key: "" # or set ANTHROPIC_API_KEY env var
 azure_api_key: "" # or set AZURE_API_KEY env var
 azure_api_base: "" # e.g., https://mydeployment.openai.azure.com/
 azure_api_version: "" # e.g., 2024-02-01
-ollama_base_url: "http://localhost:11434" # local Ollama instance
+ollama_base_url: "http://localhost:11434" # local Ollama or Cloudflare tunnel base URL
+# Example tunnel URL (paste yours here):
+# ollama_base_url: "https://<your-subdomain>.trycloudflare.com"
 
 # ── Target Agent Endpoint ─────────────────────────────────────────────────────
 # The live agent HTTP endpoint that will receive adversarial prompts.

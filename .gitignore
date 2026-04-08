@@ -1,0 +1,31 @@
+# Secrets and local config
+config.yaml
+.env
+.env.*
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache/build/test artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage and test outputs
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Generated reports/artifacts
+hardener_output/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.log

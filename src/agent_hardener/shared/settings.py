@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     azure_api_key: str = Field("", alias="AZURE_API_KEY")
     azure_api_base: str = Field("")
     azure_api_version: str = Field("")
-    ollama_base_url: str = Field("http://localhost:11434")
+    ollama_base_url: str = Field("***")
 
     # Agent endpoint
     agent_endpoint: str = Field("http://localhost:8080/run")

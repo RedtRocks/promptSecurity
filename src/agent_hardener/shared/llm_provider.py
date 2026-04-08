@@ -33,8 +33,11 @@ class LLMProvider:
         _set_if_nonempty("AZURE_API_KEY", s.azure_api_key)
         _set_if_nonempty("AZURE_API_BASE", s.azure_api_base)
         _set_if_nonempty("AZURE_API_VERSION", s.azure_api_version)
-        if s.ollama_base_url:
-            litellm.api_base = s.ollama_base_url
+        if s.ollama_base_url and _uses_ollama_model(s):
+            litellm.api_base = s.ollama_base_url.rstrip("/")
+        else:
+            # Prevent stale global api_base from affecting non-Ollama providers.
+            litellm.api_base = None
 
     @staticmethod
     def _build_router(s: Settings) -> Router:
@@ -113,3 +116,9 @@ class LLMProvider:
 def _set_if_nonempty(key: str, value: str) -> None:
     if value:
         os.environ[key] = value
+
+
+def _uses_ollama_model(settings: Settings) -> bool:
+    """Return True when any configured model targets the Ollama provider."""
+    models = [settings.default_model, settings.grader_model]
+    return any(m and m.lower().startswith("ollama/") for m in models)

@@ -274,3 +274,34 @@ class TestEditor:
         # Verify JSON serialisation
         data = json.loads(report.model_dump_json())
         assert data["tool_name"] == "send_email"
+
+    def test_recommend_edits_skips_when_no_successful_attacks(self):
+        from agent_hardener.stage2.editor import recommend_edits
+        from agent_hardener.stage2.synthesizer import CrossAttackSummary
+        from agent_hardener.shared.schemas import PrimaryExploitVector
+
+        tool = _load_fixture_tool()
+        records = [_make_record(score=0.2)]
+        findings = [
+            VulnerabilityFinding(
+                attack_record_id=records[0].record_id,
+                harm_category=records[0].harm_category,
+                exploit_type=ExploitType.MISSING_BOUNDARY_DECLARATIONS,
+                exploited_element="description",
+                description="low-confidence non-successful attack",
+            )
+        ]
+        synthesis = CrossAttackSummary(
+            total_attacks=1,
+            attacks_succeeded=0,
+            primary_exploit_vector=PrimaryExploitVector.MISSING_BOUNDARY_DECLARATIONS,
+            succeeded_categories=[],
+            most_effective_chain=[],
+            avg_success_iteration=None,
+            narrative="No successful attacks.",
+        )
+
+        llm = MagicMock()
+        edits = recommend_edits(tool, findings, synthesis, records, llm)
+        assert edits == []
+        llm.chat_json.assert_not_called()

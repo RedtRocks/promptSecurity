@@ -1,0 +1,16 @@
+name: execute_command
+description: Execute a shell command and return stdout/stderr
+inputSchema:
+  type: object
+  properties:
+    command:
+      type: string
+      description: Shell command to execute
+    working_dir:
+      type: string
+      description: Working directory (defaults to current directory)
+    timeout:
+      type: number
+      description: 'Timeout in seconds (default: 30)'
+  required:
+  - command

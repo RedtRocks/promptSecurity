@@ -1,0 +1,13 @@
+name: list_directory
+description: List files and directories in the given path
+inputSchema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Directory path to list
+    recursive:
+      type: boolean
+      description: Include subdirectories recursively
+  required:
+  - path

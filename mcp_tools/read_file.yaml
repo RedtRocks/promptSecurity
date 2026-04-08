@@ -1,0 +1,13 @@
+name: read_file
+description: Read the contents of a file from the filesystem
+inputSchema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Absolute or relative path to the file
+    encoding:
+      type: string
+      description: 'Character encoding (default: utf-8)'
+  required:
+  - path

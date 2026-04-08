@@ -95,10 +95,16 @@ def recommend_edits(
     Returns:
         List of EditRecommendation objects, one per finding.
     """
+    successful_ids = {r.record_id for r in records if r.final_score > 0.5}
+    if not successful_ids:
+        return []
+
     params_text = _format_parameters(tool)
     recommendations: list[EditRecommendation] = []
 
     for finding in findings:
+        if finding.attack_record_id not in successful_ids:
+            continue
         rec = _generate_one_edit(
             tool=tool,
             finding=finding,

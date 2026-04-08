@@ -16,6 +16,7 @@ An autonomous security pipeline CLI for hardening AI agent tool deployments.
 pip install -e .
 agent-hardener --help
 agent-hardener analyze --tool-file path/to/tool.yaml --agent-endpoint http://localhost:8000
+agent-hardener analyze --tool-file path/to/tool.yaml --config config.yaml --stage1-only
 ```
 
 ## Configuration
@@ -28,12 +29,73 @@ cp config.example.yaml config.yaml
 agent-hardener analyze --tool-file tool.yaml --config config.yaml
 ```
 
+### Using Ollama Through Cloudflare Tunnel
+
+Set these fields in `config.yaml`:
+
+```yaml
+default_model: "ollama/<your_model_name>"
+ollama_base_url: "https://<your-subdomain>.trycloudflare.com"
+```
+
+Notes:
+
+- Put your tunnel link in `ollama_base_url`.
+- Use only the base URL (no trailing slash).
+- Keep the model string in LiteLLM format: `ollama/<model_name>`.
+
+Example run:
+
+```bash
+python -m agent_hardener.cli --tool-file mcp_tools/read_file.yaml --config config.yaml
+```
+
+### Running Against A Real Agent And Real Tools
+
+For production-like evaluation, configure model inference and agent execution separately:
+
+- default_model: the policy model used by agent-hardener (for prompt generation/grading/analysis)
+- ollama_base_url: your Ollama or Cloudflare tunnel base URL
+- agent_endpoint: your real agent service endpoint
+
+Important:
+
+- agent_endpoint must point to your agent service, not to Ollama.
+- The client accepts either of these endpoint formats:
+	- base URL, example: https://my-agent.example.com
+	- explicit run URL, example: https://my-agent.example.com/run
+
+Required agent contract:
+
+- POST /run with body {"prompt": "..."}
+- response includes fields compatible with:
+	- tool_calls
+	- assistant_messages
+	- refusal_detected
+	- refusal_message
+
+Optional contract:
+
+- POST /tools/list for tool discovery (MCP style)
+
+Recommended config example:
+
+```yaml
+default_model: "ollama/gemma4:31b"
+ollama_base_url: "https://<your-ollama-tunnel>.trycloudflare.com"
+agent_endpoint: "https://<your-real-agent-host>"
+```
+
 ## Output
 
 Results are written to `./output/` (configurable) as:
 
 - `<tool_name>_report.json` — full machine-readable report
 - `<tool_name>_report.html` — interactive dashboard with Chart.js visualisations
+
+If you run with `--stage1-only`, output includes:
+
+- `stage1_attacks.json` — generated attacks only (attack cycles plus Stages 2 and 3 skipped)
 
 ## Development
 

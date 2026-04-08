@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff", "mypy"]
+dev = ["pytest>=8.0", "ruff", "mypy", "fastapi>=0.100", "uvicorn>=0.20"]
 
 [project.scripts]
 agent-hardener = "agent_hardener.cli:app"

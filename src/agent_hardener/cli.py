@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import sys
 import time
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import typer
 import yaml
@@ -20,6 +21,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from agent_hardener import __version__
+
+if TYPE_CHECKING:
+    from agent_hardener.shared.schemas import MCPToolDefinition
 
 app = typer.Typer(
     name="agent-hardener",
@@ -82,6 +86,11 @@ def analyze(
         None,
         "--agent-endpoint",
         help="Agent HTTP endpoint URL override (e.g., http://localhost:8080).",
+    ),
+    stage1_only: bool = typer.Option(
+        False,
+        "--stage1-only",
+        help="Generate Stage 1 attacks only, write stage1_attacks.json, and skip attack cycles and Stages 2/3.",
     ),
     version: Optional[bool] = typer.Option(
         None,
@@ -150,6 +159,7 @@ def analyze(
     console.print(f"[bold]Model:[/] {settings.default_model}")
     console.print(f"[bold]Agent endpoint:[/] {settings.agent_endpoint}")
     console.print(f"[bold]Max iterations:[/] {settings.max_iterations}")
+    console.print(f"[bold]Stage 1 only:[/] {'yes' if stage1_only else 'no'}")
     console.print(f"[bold]Output dir:[/] {output_dir}\n")
 
     # ── Initialise shared services ────────────────────────────────────────────
@@ -182,7 +192,36 @@ def analyze(
         prog.update(t, description=f"[green]{len(adversarial_prompts)} adversarial prompts generated[/]")
         prog.stop_task(t)
 
+    if stage1_only:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stage1_path = output_dir / "stage1_attacks.json"
+        stage1_payload = {
+            "pipeline_version": "1.0",
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "tool": json.loads(tool.model_dump_json()),
+            "stage1_check": "profile + generated_attacks_only",
+            "semantic_domain": profile.semantic_domain,
+            "ambiguities_found": profile.description_ambiguities,
+            "attacks": [json.loads(p.model_dump_json()) for p in adversarial_prompts],
+        }
+        stage1_path.write_text(json.dumps(stage1_payload, indent=2), encoding="utf-8")
+        agent.close()
+        elapsed = time.time() - pipeline_start
+
+        console.print()
+        console.print(Panel(
+            f"[bold green]Attack generation complete[/] in [cyan]{elapsed:.1f}s[/]\n\n"
+            f"  [bold]Stage 1 JSON:[/]  {stage1_path}\n"
+            f"  [dim]Attack cycles and Stages 2/3 were skipped.[/]",
+            title="[bold]Output",
+            border_style="green",
+            padding=(0, 2),
+        ))
+        return
+
     # Run attack cycles
+    import concurrent.futures
+
     attack_records = []
     attack_table = Table(show_header=True, header_style="bold cyan", border_style="dim")
     attack_table.add_column("Record ID", style="dim", width=22)
@@ -192,9 +231,9 @@ def analyze(
     attack_table.add_column("Iterations", width=10)
     attack_table.add_column("Refusal?", width=10)
 
-    for i, adv_prompt in enumerate(adversarial_prompts):
-        console.print(f"\n  [dim]Running attack {i+1}/{len(adversarial_prompts)}:[/] {adv_prompt.harm_category.value}...", end="")
-        record = run_attack_cycle(
+    def _run_single_attack(index_and_prompt):
+        i, adv_prompt = index_and_prompt
+        return run_attack_cycle(
             adversarial_prompt=adv_prompt,
             agent=agent,
             llm=llm,
@@ -202,8 +241,30 @@ def analyze(
             success_threshold=settings.attack_success_threshold,
             record_index=i + 1,
         )
-        attack_records.append(record)
 
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task(f"Running {len(adversarial_prompts)} attack cycles in parallel...", total=len(adversarial_prompts))
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(adversarial_prompts))) as executor:
+            futures = [
+                executor.submit(_run_single_attack, (i, p))
+                for i, p in enumerate(adversarial_prompts)
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    record = future.result()
+                    attack_records.append(record)
+                    prog.update(t, advance=1, description=f"[dim]Finished {record.harm_category.value}[/]")
+                except Exception as exc:
+                    err_console.print(f"[bold red]Error running attack:[/] {exc}")
+                    prog.update(t, advance=1)
+        
+        prog.stop_task(t)
+
+    # Sort attack records back to original order based on Record ID
+    attack_records.sort(key=lambda r: r.record_id)
+
+    for record in attack_records:
         score_color = "red" if record.final_score > 0.95 else "yellow" if record.final_score > 0.5 else "green"
         success_text = f"[red]YES @ P{record.attempt_number_of_success}[/]" if record.attempt_number_of_success is not None else "[green]NO[/]"
         n_iters = len(record.attack_trajectory)
@@ -217,7 +278,6 @@ def analyze(
             str(n_iters),
             refusal_text,
         )
-        console.print(f" [dim]done[/] [{'red' if record.final_score > 0.5 else 'green'}]{record.final_score:.2f}[/]")
 
     console.print()
     console.print(attack_table)
