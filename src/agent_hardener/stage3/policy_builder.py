@@ -41,7 +41,7 @@ TOOL: {tool_name}
 read_confidentiality: {read_conf}
 write_confidentiality: {write_conf}
 
-SUCCESSFUL ATTACK CHAINS (score > 0.5):
+SUCCESSFUL ATTACK CHAINS (score > {success_threshold:.2f}):
 {attack_chains}
 
 ALL ATTACK CHAINS ATTEMPTED:
@@ -124,6 +124,7 @@ def build_policy(
     analysis: FailureAnalysisReport,
     records: list[AttackRecord],
     llm: LLMProvider,
+    success_threshold: float = 0.5,
 ) -> SAMOSPolicy:
     """Build the complete SAMOS policy document (Stage 3 output).
 
@@ -138,7 +139,7 @@ def build_policy(
     Returns:
         Complete SAMOSPolicy ready for serialization.
     """
-    successful_records = [r for r in records if r.final_score > 0.5]
+    successful_records = [r for r in records if r.final_score > success_threshold]
 
     # Step 3.3 — Session taint rules
     taint_rules = _build_taint_rules(
@@ -147,6 +148,7 @@ def build_policy(
         records=records,
         successful_records=successful_records,
         llm=llm,
+        success_threshold=success_threshold,
     )
 
     # Step 3.4 — Enforcement rules for attacks not already covered by taint rules
@@ -155,6 +157,8 @@ def build_policy(
         confidentiality=confidentiality,
         capabilities=capabilities,
         successful_records=successful_records,
+        all_records=records,
+        analysis=analysis,
         llm=llm,
     )
 
@@ -189,6 +193,7 @@ def _build_taint_rules(
     records: list[AttackRecord],
     successful_records: list[AttackRecord],
     llm: LLMProvider,
+    success_threshold: float,
 ) -> SessionTaintRules:
     attack_chains_text = "\n".join(
         f"  [{r.record_id}] {r.harm_category.value}: {' → '.join(r.attack_chain)}"
@@ -206,6 +211,7 @@ def _build_taint_rules(
         write_conf=confidentiality.write_confidentiality.value,
         attack_chains=attack_chains_text,
         all_chains=all_chains_text,
+        success_threshold=success_threshold,
     )
 
     raw = llm.chat_json(
@@ -250,6 +256,9 @@ def _build_taint_rules(
             )
         )
 
+    if not propagation_rules:
+        return _conservative_taint_rules(confidentiality, records)
+
     return SessionTaintRules(
         initial_session_taint=TaintLevel(data.get("initial_session_taint", "high")),
         taint_propagation_rules=propagation_rules,
@@ -275,6 +284,8 @@ def _build_enforcement_rules(
     confidentiality: ConfidentialityAnnotations,
     capabilities: CapabilityAnnotations,
     successful_records: list[AttackRecord],
+    all_records: list[AttackRecord],
+    analysis: FailureAnalysisReport,
     llm: LLMProvider,
 ) -> list[EnforcementRule]:
     rules: list[EnforcementRule] = []
@@ -333,7 +344,30 @@ def _build_enforcement_rules(
                 )
             )
 
-    return rules
+    if rules:
+        return rules
+
+    # Defensive fallback: produce at least one actionable runtime guard even
+    # when no successful attacks were detected above threshold.
+    reference_record = all_records[0] if all_records else None
+    motivated_by = reference_record.record_id if reference_record else "ATK-BASELINE"
+    exploit_vector = analysis.primary_exploit_vector.value
+    return [
+        EnforcementRule(
+            rule_id="ENF-BASELINE-001",
+            trigger_condition=(
+                f"Require explicit user confirmation for {tool_name} when prompts contain "
+                f"authority-override language, urgency coercion, or stepwise boundary-bypass patterns "
+                f"(primary vector: {exploit_vector})."
+            ),
+            action=EnforcementAction.REQUIRE_CONFIRMATION,
+            reason=(
+                "Baseline defense-in-depth rule generated because no specific successful attack rule "
+                "was available from red-team results."
+            ),
+            motivated_by_attack=motivated_by,
+        )
+    ]
 
 
 def _check_caps_block_attack(caps: CapabilityAnnotations, record: AttackRecord) -> bool:

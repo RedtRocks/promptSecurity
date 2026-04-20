@@ -28,16 +28,19 @@ class Settings(BaseSettings):
     azure_api_key: str = Field("", alias="AZURE_API_KEY")
     azure_api_base: str = Field("")
     azure_api_version: str = Field("")
-    ollama_base_url: str = Field("***")
+    ollama_base_url: str = Field("https://supervision-enemies-merchant-intend.trycloudflare.com")
 
     # Agent endpoint
-    agent_endpoint: str = Field("http://localhost:8080/run")
+    agent_endpoint: str = Field("https://supervision-enemies-merchant-intend.trycloudflare.com")
     agent_auth_token: str = Field("")
     agent_transport: str = Field("http")  # "http" | "stdio" | "sse"
 
     # Pipeline settings
     max_iterations: int = Field(6, ge=1, le=10)
+    attack_parallelism: int = Field(2, ge=1, le=8)
     attack_success_threshold: float = Field(0.95, ge=0.0, le=1.0)
+    hardening_rounds: int = Field(3, ge=1, le=10)
+    hardening_target_success_rate: float = Field(0.0, ge=0.0, le=1.0)
 
     # Output
     output_dir: Path = Field(Path("./hardener_output"))

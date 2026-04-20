@@ -69,10 +69,12 @@ def generate_report(
 
     # Pre-compute chart data for injection into the template
     chart_data = _build_chart_data(attack_records, policy)
+    attack_summaries = _build_attack_summaries(attack_records, policy)
 
     html_content = template.render(
         tool=tool,
         attack_records=attack_records,
+        attack_summaries=attack_summaries,
         analysis=analysis,
         policy=policy,
         chart_data_json=json.dumps(chart_data),
@@ -129,3 +131,51 @@ def _build_chart_data(
         "policy_coverage": coverage_data,
         "enforcement_action_counts": exploit_counts,
     }
+
+
+def _build_attack_summaries(
+    records: list[AttackRecord],
+    policy: SAMOSPolicy,
+) -> list[dict[str, object]]:
+    """Build concise per-attack rows for the streamlined HTML report."""
+
+    summaries: list[dict[str, object]] = []
+    for record in records:
+        matched_rules = [
+            rule
+            for rule in policy.enforcement_rules
+            if rule.motivated_by_attack == record.record_id
+        ]
+
+        touched_tool = bool(record.successful_tool_calls or record.failed_tool_calls)
+        if not touched_tool:
+            touched_tool = any(it.trajectory.tool_calls for it in record.attack_trajectory)
+
+        attack_success = record.attempt_number_of_success is not None
+        if attack_success and matched_rules:
+            mitigation_status = "yes"
+        elif attack_success:
+            mitigation_status = "no-explicit-rule"
+        else:
+            mitigation_status = "not-needed"
+
+        first_prompt = record.attack_trajectory[0].prompt_used if record.attack_trajectory else record.final_prompt_used
+
+        summaries.append(
+            {
+                "record_id": record.record_id,
+                "harm_category": record.harm_category.value,
+                "attack_intensity": record.attack_intensity.value,
+                "final_score": record.final_score,
+                "attack_success": attack_success,
+                "worked_on_tool": touched_tool,
+                "failure_type": record.failure_type.value,
+                "first_prompt": first_prompt,
+                "final_prompt": record.final_prompt_used,
+                "policy_rule_ids": [rule.rule_id for rule in matched_rules],
+                "policy_actions": [rule.action.value for rule in matched_rules],
+                "policy_mitigated": mitigation_status,
+            }
+        )
+
+    return summaries

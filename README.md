@@ -17,6 +17,7 @@ pip install -e .
 agent-hardener --help
 agent-hardener analyze --tool-file path/to/tool.yaml --agent-endpoint http://localhost:8000
 agent-hardener analyze --tool-file path/to/tool.yaml --config config.yaml --stage1-only
+agent-hardener harden --tool-file path/to/tool.yaml --config config.yaml
 ```
 
 ## Configuration
@@ -27,6 +28,7 @@ Copy `config.example.yaml` and set your API keys and agent endpoint:
 cp config.example.yaml config.yaml
 # Edit config.yaml with your settings
 agent-hardener analyze --tool-file tool.yaml --config config.yaml
+agent-hardener harden --tool-file tool.yaml --config config.yaml --hardening-rounds 3
 ```
 
 ### Using Ollama Through Cloudflare Tunnel

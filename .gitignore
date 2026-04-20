@@ -24,6 +24,23 @@ htmlcov/
 
 # Generated reports/artifacts
 hardener_output/
+full_pipeline_*/
+test_output*/
+
+# Per-run report artifacts
+**/report.html
+**/report.json
+**/hardening_history.json
+**/live_eval_summary.json
+**/STEP_BY_STEP_SOLUTION.md
+
+# Temporary local docs/notes
+IMPLEMENTATION_SUMMARY.md
+MODEL_OPTIMIZATION_GUIDE.md
+MODEL_OPTIMIZATION_README.md
+PROMPT_EXAMPLES.md
+RUN_PROJECT_INSTRUCTIONS.md
+TEST_PROMPTS_CLI.md
 
 # OS/editor noise
 .DS_Store

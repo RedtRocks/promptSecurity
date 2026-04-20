@@ -3,598 +3,272 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>agent-hardener — Security Report: {{ tool.name }}</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <title>agent-hardener report: {{ tool.name }}</title>
   <style>
     :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
-      --surface2: #22263a;
-      --border: #2e3350;
-      --accent: #6366f1;
-      --accent2: #22d3ee;
-      --danger: #f43f5e;
-      --warn: #f59e0b;
-      --ok: #22c55e;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
-      --radius: 10px;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --border: #dce3ee;
+      --text: #122033;
+      --muted: #5d6d83;
+      --good: #127c3a;
+      --warn: #9a6400;
+      --bad: #b42318;
+      --accent: #005cc5;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.6; }
-    a { color: var(--accent2); text-decoration: none; }
-
-    /* ── Layout ── */
-    .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 20px 32px; display: flex; align-items: center; justify-content: space-between; }
-    .header h1 { font-size: 1.3rem; font-weight: 700; letter-spacing: -.3px; }
-    .header h1 span { color: var(--accent); }
-    .header .meta { color: var(--muted); font-size: 12px; text-align: right; }
-    .container { max-width: 1400px; margin: 0 auto; padding: 28px 32px; }
-
-    /* ── Section headers ── */
-    .section { margin-bottom: 36px; }
-    .section-title { font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); border-left: 3px solid var(--accent); padding-left: 10px; margin-bottom: 16px; }
-
-    /* ── Cards ── */
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
-    .card + .card { margin-top: 12px; }
-    .card-title { font-weight: 600; font-size: .95rem; margin-bottom: 8px; }
-    .card-sub { color: var(--muted); font-size: .8rem; margin-bottom: 12px; }
-
-    /* ── Grid ── */
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-    @media (max-width: 1100px) { .grid-4 { grid-template-columns: repeat(2,1fr); } .grid-3 { grid-template-columns: repeat(2,1fr); } }
-    @media (max-width: 700px)  { .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; } }
-
-    /* ── Stat tiles ── */
-    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
-    .stat .val { font-size: 2rem; font-weight: 800; line-height: 1; }
-    .stat .lbl { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; margin-top: 6px; }
-    .stat.danger .val { color: var(--danger); }
-    .stat.warn .val   { color: var(--warn); }
-    .stat.ok .val     { color: var(--ok); }
-    .stat.accent .val { color: var(--accent); }
-
-    /* ── Badges ── */
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
-    .badge-danger  { background: #f43f5e22; color: var(--danger); border: 1px solid #f43f5e44; }
-    .badge-warn    { background: #f59e0b22; color: var(--warn);   border: 1px solid #f59e0b44; }
-    .badge-ok      { background: #22c55e22; color: var(--ok);     border: 1px solid #22c55e44; }
-    .badge-neutral { background: #6366f122; color: var(--accent); border: 1px solid #6366f144; }
-    .badge-muted   { background: #1e2235;   color: var(--muted);  border: 1px solid var(--border); }
-
-    /* ── Tables ── */
-    .tbl { width: 100%; border-collapse: collapse; font-size: .82rem; }
-    .tbl th { background: var(--surface2); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-size: .7rem; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
-    .tbl td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    .tbl tr:last-child td { border-bottom: none; }
-    .tbl tr:hover td { background: var(--surface2); }
-
-    /* ── Code / mono ── */
-    pre, code { font-family: 'Consolas', 'Fira Mono', monospace; font-size: .78rem; }
-    .code-block { background: #0a0c14; border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; color: #a5f3fc; }
-
-    /* ── Score bar ── */
-    .score-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-top: 6px; }
-    .score-fill { height: 100%; border-radius: 3px; }
-
-    /* ── Iteration chain ── */
-    .iter-chain { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
-    .iter-chip { padding: 3px 10px; border-radius: 999px; font-size: .7rem; font-weight: 600; border: 1px solid; }
-
-    /* ── Progress chips ── */
-    .chip-success { color: var(--ok);     border-color: #22c55e55; background: #22c55e11; }
-    .chip-fail    { color: var(--danger); border-color: #f43f5e55; background: #f43f5e11; }
-    .chip-partial { color: var(--warn);   border-color: #f59e0b55; background: #f59e0b11; }
-
-    /* ── Collapsible ── */
-    details { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; }
-    details summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: .82rem; color: var(--accent2); user-select: none; list-style: none; }
-    details summary::before { content: '▶ '; font-size: .7rem; }
-    details[open] summary::before { content: '▼ '; }
-    details .detail-body { padding: 12px 14px; border-top: 1px solid var(--border); }
-
-    /* ── Charts ── */
-    .chart-wrap { position: relative; }
-    canvas { max-height: 280px; }
-
-    /* ── Policy rules ── */
-    .rule { display: flex; gap: 12px; align-items: flex-start; padding: 12px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border); margin-bottom: 8px; }
-    .rule .rule-action { min-width: 64px; text-align: center; }
-    .rule .rule-body { flex: 1; }
-    .rule .rule-id { font-size: .7rem; color: var(--muted); margin-bottom: 2px; }
-    .rule .rule-trigger { font-size: .78rem; margin-bottom: 4px; }
-    .rule .rule-reason { font-size: .75rem; color: var(--muted); }
-
-    /* ── Deployment directives ── */
-    .directive { background: #0a0c14; border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 10px 14px; margin-bottom: 8px; font-family: monospace; font-size: .78rem; }
-    .directive .cap-name { color: var(--accent2); font-weight: 700; }
-    .directive .mechanism { color: var(--muted); font-size: .7rem; margin-bottom: 4px; }
-
-    /* ── Scrollable JSON box ── */
-    #raw-json-box { max-height: 400px; overflow-y: auto; }
-
-    footer { text-align: center; color: var(--muted); font-size: .72rem; padding: 24px; border-top: 1px solid var(--border); margin-top: 24px; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      line-height: 1.45;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    h1 { margin: 0; font-size: 22px; }
+    h2 { margin: 0 0 10px 0; font-size: 17px; }
+    .meta { color: var(--muted); font-size: 12px; text-align: right; }
+    .muted { color: var(--muted); }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+    }
+    .stat {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfe;
+    }
+    .stat .label { color: var(--muted); font-size: 12px; }
+    .stat .value { font-size: 24px; font-weight: 700; margin-top: 3px; }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      border-radius: 999px;
+      padding: 2px 9px;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    .b-good { color: var(--good); border-color: #8ad6a7; background: #e9f8ef; }
+    .b-warn { color: var(--warn); border-color: #e7c276; background: #fff7e2; }
+    .b-bad { color: var(--bad); border-color: #ef9a95; background: #fff0ef; }
+    .b-neutral { color: #23436e; border-color: #aec4e6; background: #eef4ff; }
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 900px;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border);
+      padding: 9px 8px;
+    }
+    th {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      background: #f8fafd;
+    }
+    details { margin-top: 6px; }
+    summary { cursor: pointer; color: var(--accent); }
+    .code {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0d1524;
+      color: #d6e7ff;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+    .list { margin: 0; padding-left: 18px; }
+    .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 10px; }
+    @media (max-width: 900px) {
+      .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .meta { text-align: left; }
+      .header { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
-
-<!-- ═══════════════════════════ HEADER ════════════════════════════════════ -->
-<div class="header">
-  <h1>agent-<span>hardener</span> &nbsp;·&nbsp; Security Report</h1>
-  <div class="meta">
-    <div><strong>Tool:</strong> {{ tool.name }}</div>
-    <div><strong>Generated:</strong> {{ generated_at }}</div>
-    <div><strong>Pipeline v1.0</strong></div>
-  </div>
-</div>
-
 <div class="container">
 
-<!-- ═══════════════════════════ OVERVIEW ═════════════════════════════════ -->
-<div class="section">
-  <div class="section-title">Overview</div>
-  <div class="grid-4">
-    <div class="stat {% if analysis.attacks_succeeded > 0 %}danger{% else %}ok{% endif %}">
-      <div class="val">{{ analysis.attacks_succeeded }}<span style="font-size:1.1rem;font-weight:400;color:var(--muted)">/{{ analysis.total_attacks_attempted }}</span></div>
-      <div class="lbl">Attacks Succeeded (score &gt; 0.5)</div>
-    </div>
-    <div class="stat accent">
-      <div class="val">{{ policy.policy_coverage.attacks_fully_blocked_by_policy }}</div>
-      <div class="lbl">Fully Blocked by Policy</div>
-    </div>
-    <div class="stat warn">
-      <div class="val">{{ policy.policy_coverage.attacks_partially_mitigated }}</div>
-      <div class="lbl">Partially Mitigated</div>
-    </div>
-    <div class="stat {% if policy.policy_coverage.unmitigated_attacks > 0 %}danger{% else %}ok{% endif %}">
-      <div class="val">{{ policy.policy_coverage.unmitigated_attacks }}</div>
-      <div class="lbl">Unmitigated</div>
-    </div>
-  </div>
-
-  <div class="grid-2" style="margin-top:16px">
-    <div class="card">
-      <div class="card-title">Tool Profile</div>
-      <table class="tbl">
-        <tr><td style="color:var(--muted);width:140px">Name</td><td><code>{{ tool.name }}</code></td></tr>
-        <tr><td style="color:var(--muted)">Description</td><td>{{ tool.description }}</td></tr>
-        <tr><td style="color:var(--muted)">Parameters</td><td>
-          {% for p in tool.parameters %}
-            <code>{{ p.name }}</code> <span class="badge badge-muted">{{ p.type }}</span>
-            {% if p.required %}<span class="badge badge-warn">required</span>{% endif %}
-            {% if not loop.last %}&nbsp;&nbsp;{% endif %}
-          {% else %}(none)
-          {% endfor %}
-        </td></tr>
-        <tr><td style="color:var(--muted)">Primary Exploit Vector</td>
-          <td><span class="badge badge-danger">{{ analysis.primary_exploit_vector }}</span></td></tr>
-      </table>
-    </div>
-    <div class="card">
-      <div class="card-title">Confidentiality Annotations</div>
-      <table class="tbl">
-        <tr><td style="color:var(--muted);width:160px">read_confidentiality</td>
-          <td><span class="badge {% if policy.confidentiality_annotations.read_confidentiality == 'high' %}badge-danger{% else %}badge-ok{% endif %}">
-            {{ policy.confidentiality_annotations.read_confidentiality }}</span></td></tr>
-        <tr><td style="color:var(--muted)">write_confidentiality</td>
-          <td><span class="badge {% if policy.confidentiality_annotations.write_confidentiality == 'high' %}badge-danger{% else %}badge-ok{% endif %}">
-            {{ policy.confidentiality_annotations.write_confidentiality }}</span></td></tr>
-        <tr><td style="color:var(--muted)">Read justification</td>
-          <td style="font-size:.78rem;color:var(--muted)">{{ policy.confidentiality_annotations.read_justification }}</td></tr>
-        <tr><td style="color:var(--muted)">Write justification</td>
-          <td style="font-size:.78rem;color:var(--muted)">{{ policy.confidentiality_annotations.write_justification }}</td></tr>
-        <tr><td style="color:var(--muted)">Session taint</td>
-          <td><span class="badge {% if policy.session_taint_rules.initial_session_taint == 'high' %}badge-danger{% else %}badge-ok{% endif %}">
-            initial = {{ policy.session_taint_rules.initial_session_taint }}</span></td></tr>
-      </table>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════════════════ CHARTS ═══════════════════════════════════ -->
-<div class="section">
-  <div class="section-title">Attack Analysis Charts</div>
-  <div class="grid-2">
-    <div class="card chart-wrap">
-      <div class="card-title">Attack Score by Harm Category</div>
-      <div class="card-sub">Final score per harm category (0 = full refusal, 1 = full success)</div>
-      <canvas id="chartScores"></canvas>
-    </div>
-    <div class="card chart-wrap">
-      <div class="card-title">Policy Coverage</div>
-      <div class="card-sub">How attacks are addressed by the generated policy</div>
-      <canvas id="chartCoverage"></canvas>
-    </div>
-  </div>
-  <div class="card chart-wrap" style="margin-top:16px">
-    <div class="card-title">Score Progression by Iteration</div>
-    <div class="card-sub">How each attack's score evolved across refinement iterations (P0–P6)</div>
-    <canvas id="chartIterations"></canvas>
-  </div>
-</div>
-
-<!-- ═══════════════════════════ STAGE 1 — ATTACKS ═════════════════════════ -->
-<div class="section">
-  <div class="section-title">Stage 1 — Adversarial Attack Records</div>
-  {% for record in attack_records %}
-  <div class="card" style="margin-bottom:12px">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+  <div class="panel">
+    <div class="header">
       <div>
-        <span class="badge badge-neutral" style="font-size:.68rem">{{ record.record_id }}</span>
-        &nbsp;
-        <span class="badge {% if record.final_score > 0.5 %}badge-danger{% elif record.final_score > 0 %}badge-warn{% else %}badge-ok{% endif %}">
-          {{ record.harm_category }}
-        </span>
-        {% if record.refusal_occurred %}
-          <span class="badge badge-ok" style="margin-left:4px">refusal @ P{{ record.refusal_attempt_number }}</span>
-        {% endif %}
+        <h1>agent-hardener report</h1>
+        <div class="muted">Tool: <strong>{{ tool.name }}</strong></div>
       </div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <div style="text-align:right">
-          <div style="font-size:1.4rem;font-weight:800;color:{% if record.final_score > 0.95 %}var(--danger){% elif record.final_score > 0.5 %}var(--warn){% else %}var(--ok){% endif %}">
-            {{ "%.2f"|format(record.final_score) }}
-          </div>
-          <div style="font-size:.68rem;color:var(--muted)">final score</div>
-        </div>
-        <div>
-          {% if record.attempt_number_of_success is not none %}
-            <span class="badge badge-danger">SUCCESS @ P{{ record.attempt_number_of_success }}</span>
-          {% else %}
-            <span class="badge badge-ok">FAILED / DEFENDED</span>
-          {% endif %}
-        </div>
+      <div class="meta">
+        <div>Generated: {{ generated_at }}</div>
+        <div>Pipeline version: 1.0</div>
       </div>
     </div>
 
-    <!-- score bar -->
-    <div class="score-bar" style="margin-top:10px">
-      <div class="score-fill" style="width:{{ (record.final_score * 100)|int }}%;background:{% if record.final_score > 0.95 %}var(--danger){% elif record.final_score > 0.5 %}var(--warn){% else %}var(--ok){% endif %}"></div>
-    </div>
-
-    <div style="margin-top:10px;font-size:.78rem;color:var(--muted)">
-      <strong style="color:var(--text)">Attack chain:</strong>
-      {% for tool_name in record.attack_chain %}
-        <code>{{ tool_name }}</code>{% if not loop.last %} &rarr; {% endif %}
-      {% endfor %}
-      &nbsp;&nbsp;|&nbsp;&nbsp;<strong style="color:var(--text)">Failure type:</strong> {{ record.failure_type }}
-    </div>
-
-    <!-- Iteration chips -->
-    <div class="iter-chain">
-      {% for it in record.attack_trajectory %}
-        <span class="iter-chip {% if it.success %}chip-success{% elif it.score > 0 %}chip-partial{% else %}chip-fail{% endif %}">
-          P{{ it.attempt_number }}&nbsp;{{ "%.2f"|format(it.score) }}
-        </span>
-      {% endfor %}
-    </div>
-
-    <!-- Collapsible details -->
-    <details>
-      <summary>Final prompt used</summary>
-      <div class="detail-body">
-        <div class="code-block">{{ record.final_prompt_used }}</div>
+    <div class="stats">
+      <div class="stat">
+        <div class="label">Total Attacks</div>
+        <div class="value">{{ analysis.total_attacks_attempted }}</div>
       </div>
-    </details>
+      <div class="stat">
+        <div class="label">Succeeded (Current Threshold)</div>
+        <div class="value {% if analysis.attacks_succeeded > 0 %}bad{% else %}good{% endif %}">{{ analysis.attacks_succeeded }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">Policy Rules</div>
+        <div class="value">{{ policy.enforcement_rules | length }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">Primary Exploit Vector</div>
+        <div class="value" style="font-size: 16px; margin-top: 8px;">{{ analysis.primary_exploit_vector.value }}</div>
+      </div>
+    </div>
+  </div>
 
-    {% if record.attack_trajectory %}
-    <details>
-      <summary>Full iteration trajectory ({{ record.attack_trajectory|length }} attempts)</summary>
-      <div class="detail-body">
-        {% for it in record.attack_trajectory %}
-          <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)">
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-              <span class="badge badge-neutral" style="font-size:.68rem">P{{ it.attempt_number }}</span>
-              <span style="font-size:.8rem;color:{% if it.success %}var(--ok){% elif it.score > 0 %}var(--warn){% else %}var(--danger){% endif %}">
-                score={{ "%.2f"|format(it.score) }}
-              </span>
-              {% if it.failure_type != 'not_applicable' %}
-                <span class="badge badge-muted">{{ it.failure_type }}</span>
+  <div class="panel">
+    <h2>Attack Outcomes (Prompt -> Tool Result -> Policy Mitigation)</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Attack</th>
+            <th>Prompt Used</th>
+            <th>Worked On Tool?</th>
+            <th>Attack Worked?</th>
+            <th>Policy Generated</th>
+            <th>Policy Mitigated Attack?</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in attack_summaries %}
+          <tr>
+            <td>
+              <div><strong>{{ row.record_id }}</strong></div>
+              <div class="muted">{{ row.harm_category }} | {{ row.attack_intensity }}</div>
+              <div class="muted">score={{ "%.2f"|format(row.final_score) }}</div>
+            </td>
+            <td>
+              <details>
+                <summary>View final prompt</summary>
+                <div class="code">{{ row.final_prompt }}</div>
+              </details>
+            </td>
+            <td>
+              {% if row.worked_on_tool %}
+                <span class="badge b-good">yes</span>
+              {% else %}
+                <span class="badge b-bad">no</span>
               {% endif %}
-            </div>
-            {% if it.trajectory.tool_calls %}
-              <div style="font-size:.75rem;color:var(--muted);margin-bottom:4px">Tool calls:</div>
-              {% for tc in it.trajectory.tool_calls %}
-                <div style="font-size:.75rem;padding:2px 0">
-                  <span style="color:{% if tc.success %}var(--ok){% else %}var(--danger){% endif %}">{% if tc.success %}✓{% else %}✗{% endif %}</span>
-                  <code>{{ tc.tool_name }}</code>
-                  {% if not tc.success and tc.failure_reason %}<span style="color:var(--muted)"> — {{ tc.failure_reason[:120] }}</span>{% endif %}
-                </div>
-              {% endfor %}
-            {% endif %}
-            {% if it.trajectory.refusal_detected %}
-              <div style="font-size:.74rem;color:var(--ok);margin-top:4px">🛡 Refusal: {{ it.trajectory.refusal_message[:150] }}</div>
-            {% endif %}
-          </div>
-        {% endfor %}
-      </div>
-    </details>
-    {% endif %}
-
-  </div>
-  {% endfor %}
-</div>
-
-<!-- ═══════════════════════════ STAGE 2 — ANALYSIS ═══════════════════════ -->
-<div class="section">
-  <div class="section-title">Stage 2 — Failure Analysis</div>
-
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-title">Cross-Attack Summary</div>
-    <p style="font-size:.85rem;line-height:1.7;color:var(--text)">{{ analysis.cross_attack_summary }}</p>
-  </div>
-
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-title">Vulnerability Findings</div>
-    <table class="tbl">
-      <thead>
-        <tr>
-          <th>Attack Record</th>
-          <th>Harm Category</th>
-          <th>Exploit Type</th>
-          <th>Exploited Element</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for f in analysis.vulnerability_findings %}
-        <tr>
-          <td><code>{{ f.attack_record_id }}</code></td>
-          <td><span class="badge badge-neutral">{{ f.harm_category }}</span></td>
-          <td>
-            <span class="badge badge-danger">{{ f.exploit_type }}</span>
-          </td>
-          <td><code style="font-size:.75rem;color:var(--accent2)">{{ f.exploited_element[:80] }}</code></td>
-          <td style="font-size:.78rem;color:var(--muted)">{{ f.description[:200] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <div class="card-title">Documentation Edit Recommendations</div>
-    <table class="tbl">
-      <thead>
-        <tr>
-          <th>Action</th>
-          <th>Target</th>
-          <th>Motivation</th>
-          <th>Change</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for rec in analysis.edit_recommendations %}
-        <tr>
-          <td>
-            <span class="badge {% if rec.action == 'ADD' %}badge-ok{% elif rec.action == 'MODIFY' %}badge-warn{% else %}badge-danger{% endif %}">
-              {{ rec.action }}
-            </span>
-          </td>
-          <td><code style="font-size:.75rem">{{ rec.target }}</code></td>
-          <td><code style="font-size:.72rem;color:var(--muted)">{{ rec.motivation }}</code></td>
-          <td style="font-size:.75rem">
-            {% if rec.original_text %}
-              <div style="color:var(--danger);text-decoration:line-through;margin-bottom:2px">{{ rec.original_text[:120] }}</div>
-            {% endif %}
-            {% if rec.new_text %}
-              <div style="color:var(--ok)">{{ rec.new_text[:150] }}</div>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- ═══════════════════════════ STAGE 3 — POLICY ════════════════════════ -->
-<div class="section">
-  <div class="section-title">Stage 3 — SAMOS Security Policy</div>
-
-  <!-- Capability Annotations -->
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-title">Capability Annotations</div>
-    <table class="tbl">
-      <thead><tr><th>Capability</th><th>Assigned Value</th><th>Justification</th></tr></thead>
-      <tbody>
-        {% set caps = policy.capability_annotations %}
-        {% set justifications = caps.capability_restriction_justifications %}
-        {% for cap_name in ['network', 'filesystem', 'environment', 'execution', 'software_libraries'] %}
-        {% set cap_val = caps[cap_name] %}
-        <tr>
-          <td><code>{{ cap_name }}</code></td>
-          <td>
-            {% if cap_val == false or cap_val == [] %}
-              <span class="badge badge-danger">false — BLOCKED</span>
-            {% elif cap_val is iterable and cap_val is not string %}
-              <span class="badge badge-warn">restricted</span>
-              <div style="margin-top:4px">{% for v in cap_val %}<code style="font-size:.72rem;color:var(--accent2)">{{ v }}</code><br>{% endfor %}</div>
-            {% else %}
-              <span class="badge badge-ok">{{ cap_val }}</span>
-            {% endif %}
-          </td>
-          <td style="font-size:.75rem;color:var(--muted)">{{ justifications.get(cap_name, '—') }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Taint Propagation Rules -->
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-title">Session Taint Propagation Rules</div>
-    <div style="margin-bottom:10px;font-size:.82rem">
-      <strong>initial_session_taint:</strong>
-      <span class="badge {% if policy.session_taint_rules.initial_session_taint == 'high' %}badge-danger{% else %}badge-ok{% endif %}">
-        {{ policy.session_taint_rules.initial_session_taint }}
-      </span>
+            </td>
+            <td>
+              {% if row.attack_success %}
+                <span class="badge b-bad">yes</span>
+              {% else %}
+                <span class="badge b-good">no</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.policy_rule_ids %}
+                {% for rid in row.policy_rule_ids %}
+                  <div><span class="badge b-neutral">{{ rid }}</span></div>
+                {% endfor %}
+                <div class="muted" style="margin-top:4px">actions: {{ row.policy_actions | join(", ") }}</div>
+              {% else %}
+                <span class="muted">none specific</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.policy_mitigated == "yes" %}
+                <span class="badge b-good">yes</span>
+              {% elif row.policy_mitigated == "no-explicit-rule" %}
+                <span class="badge b-warn">unknown</span>
+                <div class="muted" style="margin-top:4px">no explicit per-attack rule</div>
+              {% else %}
+                <span class="badge b-neutral">n/a</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-    <table class="tbl">
-      <thead><tr><th>From Taint</th><th>Action</th><th>Rule</th><th>Motivated By Chain</th></tr></thead>
-      <tbody>
-        {% for rule in policy.session_taint_rules.taint_propagation_rules %}
-        <tr>
-          <td><span class="badge {% if rule.from_taint == 'high' %}badge-danger{% else %}badge-warn{% endif %}">{{ rule.from_taint }}</span></td>
-          <td><span class="badge {% if rule.action == 'BLOCK' %}badge-danger{% elif rule.action == 'UPGRADE_TAINT' %}badge-warn{% else %}badge-ok{% endif %}">{{ rule.action }}</span></td>
-          <td style="font-size:.78rem">{{ rule.rule_description }}</td>
-          <td style="font-size:.75rem;color:var(--accent2)">
-            {% for t in rule.motivated_by_attack_chain %}<code>{{ t }}</code>{% if not loop.last %} &rarr; {% endif %}{% endfor %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
   </div>
 
-  <!-- Enforcement Rules -->
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-title">Enforcement Rules</div>
+  <div class="panel">
+    <h2>Policy Generated</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th style="width: 280px;">Confidentiality (read/write)</th>
+          <td>
+            {{ policy.confidentiality_annotations.read_confidentiality }} / {{ policy.confidentiality_annotations.write_confidentiality }}
+          </td>
+        </tr>
+        <tr>
+          <th>Initial session taint</th>
+          <td>{{ policy.session_taint_rules.initial_session_taint }}</td>
+        </tr>
+        <tr>
+          <th>Coverage summary</th>
+          <td>
+            fully_blocked={{ policy.policy_coverage.attacks_fully_blocked_by_policy }},
+            partially_mitigated={{ policy.policy_coverage.attacks_partially_mitigated }},
+            model_level={{ policy.policy_coverage.attacks_requiring_model_level_defense }},
+            unmitigated={{ policy.policy_coverage.unmitigated_attacks }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 style="margin-top:14px;">Enforcement Rules</h2>
     {% if policy.enforcement_rules %}
-      {% for rule in policy.enforcement_rules %}
-        <div class="rule">
-          <div class="rule-action">
-            <span class="badge {% if rule.action == 'BLOCK' %}badge-danger{% elif rule.action == 'AUDIT' %}badge-warn{% else %}badge-neutral{% endif %}" style="padding:6px 10px;font-size:.75rem">
-              {{ rule.action }}
-            </span>
-          </div>
-          <div class="rule-body">
-            <div class="rule-id">{{ rule.rule_id }} &nbsp;·&nbsp; motivated by <code>{{ rule.motivated_by_attack }}</code></div>
-            <div class="rule-trigger">{{ rule.trigger_condition }}</div>
-            <div class="rule-reason">{{ rule.reason }}</div>
-          </div>
-        </div>
-      {% endfor %}
+      <ul class="list">
+        {% for rule in policy.enforcement_rules %}
+          <li>
+            <strong>{{ rule.rule_id }}</strong> ({{ rule.action }})
+            - motivated by {{ rule.motivated_by_attack }}
+            <div class="muted">{{ rule.trigger_condition }}</div>
+          </li>
+        {% endfor %}
+      </ul>
     {% else %}
-      <p style="color:var(--muted);font-size:.82rem">No additional enforcement rules generated — attacks are fully covered by confidentiality and capability annotations.</p>
+      <div class="muted">No enforcement rules were generated.</div>
     {% endif %}
   </div>
 
-  <!-- Deployment Spec -->
-  <div class="card">
-    <div class="card-title">Deployment Specification</div>
-    <div style="margin-bottom:12px">
-      <strong>Isolation Level:</strong>
-      <span class="badge badge-danger" style="margin-left:6px">{{ policy.deployment_spec.isolation_level }}</span>
-    </div>
-    {% for d in policy.deployment_spec.container_enforcements %}
-      <div class="directive">
-        <div class="mechanism">{{ d.mechanism }}</div>
-        <span class="cap-name">{{ d.capability }}:</span> {{ d.directive }}
-      </div>
-    {% endfor %}
+  <div class="foot">
+    Streamlined report: prompt, tool outcome, policy output, and mitigation status.
   </div>
 </div>
-
-<!-- ═══════════════════════════ RAW JSON ═════════════════════════════════ -->
-<div class="section">
-  <div class="section-title">Raw Pipeline Output</div>
-  <div class="card">
-    <div class="card-title">Full report.json</div>
-    <div class="card-sub">Machine-readable complete output of all three pipeline stages</div>
-    <pre class="code-block" id="raw-json-box"></pre>
-    <script>
-      // Inject via JS to avoid Jinja2 auto-escaping issues with nested JSON
-      const raw = {{ report_data_json }};
-      document.getElementById("raw-json-box").textContent = JSON.stringify(raw, null, 2);
-    </script>
-  </div>
-</div>
-
-</div><!-- /container -->
-
-<footer>
-  Generated by <strong>agent-hardener v1.0</strong> · {{ generated_at }} · This report contains sensitive security findings — handle accordingly.
-</footer>
-
-<!-- ═══════════════════════════ CHARTS JS ════════════════════════════════ -->
-<script>
-const chartData = {{ chart_data_json }};
-
-// ── Chart 1: Score by harm category ──────────────────────────────────────
-(function() {
-  const labels = Object.keys(chartData.category_scores);
-  const scores = Object.values(chartData.category_scores);
-  const colors = scores.map(s => s > 0.95 ? '#f43f5e' : s > 0.5 ? '#f59e0b' : '#22c55e');
-
-  new Chart(document.getElementById('chartScores'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Final Score',
-        data: scores,
-        backgroundColor: colors,
-        borderRadius: 4,
-        borderSkipped: false,
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: {
-        y: { min: 0, max: 1, grid: { color: '#2e3350' }, ticks: { color: '#94a3b8' } },
-        x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
-      }
-    }
-  });
-})();
-
-// ── Chart 2: Policy coverage donut ───────────────────────────────────────
-(function() {
-  const cov = chartData.policy_coverage;
-  new Chart(document.getElementById('chartCoverage'), {
-    type: 'doughnut',
-    data: {
-      labels: ['Fully Blocked', 'Partially Mitigated', 'Needs Model Defense', 'Unmitigated'],
-      datasets: [{
-        data: [cov.fully_blocked, cov.partially_mitigated, cov.model_level, cov.unmitigated],
-        backgroundColor: ['#22c55e', '#f59e0b', '#6366f1', '#f43f5e'],
-        borderWidth: 2,
-        borderColor: '#1a1d27',
-      }]
-    },
-    options: {
-      responsive: true,
-      cutout: '70%',
-      plugins: {
-        legend: { position: 'right', labels: { color: '#94a3b8', boxWidth: 12, padding: 12 } }
-      }
-    }
-  });
-})();
-
-// ── Chart 3: Score progression over iterations ───────────────────────────
-(function() {
-  const palette = ['#6366f1','#f43f5e','#22c55e','#f59e0b','#22d3ee','#a78bfa','#fb7185','#34d399'];
-  const datasets = chartData.iteration_progressions.map((series, i) => ({
-    label: series.label,
-    data: series.data.map(pt => ({ x: pt.attempt, y: pt.score })),
-    borderColor: palette[i % palette.length],
-    backgroundColor: palette[i % palette.length] + '22',
-    tension: 0.3,
-    pointRadius: 4,
-    fill: false,
-  }));
-
-  new Chart(document.getElementById('chartIterations'), {
-    type: 'line',
-    data: { datasets },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { position: 'right', labels: { color: '#94a3b8', boxWidth: 12, padding: 8, font: { size: 11 } } }
-      },
-      scales: {
-        x: { type: 'linear', title: { display: true, text: 'Attempt #', color: '#94a3b8' }, grid: { color: '#2e3350' }, ticks: { color: '#94a3b8', stepSize: 1 } },
-        y: { min: 0, max: 1, title: { display: true, text: 'Score', color: '#94a3b8' }, grid: { color: '#2e3350' }, ticks: { color: '#94a3b8' } }
-      }
-    }
-  });
-})();
-</script>
-
 </body>
 </html>

@@ -81,6 +81,10 @@ def profile_tool(tool: MCPToolDefinition, llm: LLMProvider) -> ToolProfile:
     Returns:
         A populated ToolProfile ready for Stage 1.2.
     """
+    # Get model-optimized parameters
+    profile_temp, profile_tokens = llm.get_profile_params()
+    enhanced_system = llm.enhance_system_prompt(_PROFILE_SYSTEM)
+    
     params_text = _format_parameters(tool)
     user_msg = _PROFILE_USER_TMPL.format(
         name=tool.name,
@@ -91,15 +95,32 @@ def profile_tool(tool: MCPToolDefinition, llm: LLMProvider) -> ToolProfile:
 
     raw = llm.chat_json(
         messages=[
-            {"role": "system", "content": _PROFILE_SYSTEM},
+            {"role": "system", "content": enhanced_system},
             {"role": "user", "content": user_msg},
-        ]
+        ],
+        temperature=profile_temp,
+        max_tokens=profile_tokens,
     )
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Profiler LLM returned invalid JSON: {exc}\nRaw:\n{raw}") from exc
+    data = _try_parse_json_object(raw)
+    if data is None:
+        retry_user_msg = (
+            user_msg
+            + "\n\nIMPORTANT: Return STRICT JSON only. No markdown fences. "
+            + "Populate every top-level key exactly as requested."
+        )
+        retry_raw = llm.chat(
+            messages=[
+                {"role": "system", "content": enhanced_system},
+                {"role": "user", "content": retry_user_msg},
+            ],
+            temperature=0.05,  # Even more deterministic for retry
+            max_tokens=int(profile_tokens * 0.9),
+        )
+        data = _try_parse_json_object(retry_raw)
+
+    if data is None:
+        return _fallback_profile(tool)
 
     return _build_profile(tool.name, data)
 
@@ -113,6 +134,77 @@ def _format_parameters(tool: MCPToolDefinition) -> str:
         enum_hint = f" enum={p.enum}" if p.enum else ""
         lines.append(f"  - {p.name} ({p.type}{enum_hint}){req}: {p.description}")
     return "\n".join(lines)
+
+
+def _try_parse_json_object(raw: str) -> dict | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    snippet = text[start : end + 1]
+    try:
+        obj = json.loads(snippet)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _fallback_profile(tool: MCPToolDefinition) -> ToolProfile:
+    """Deterministic fallback when profiler LLM output is malformed."""
+    desc = (tool.description or "").lower()
+    names = [p.name.lower() for p in tool.parameters]
+
+    filesystem = any(
+        k in desc for k in ["file", "filesystem", "path", "directory"]
+    ) or any("path" in n or "file" in n or "dir" in n for n in names)
+    network = any(k in desc for k in ["http", "url", "web", "network", "api"])
+    environment = any(k in desc for k in ["env", "environment variable"])
+    execution = any(k in desc for k in ["execute", "command", "shell", "subprocess"])
+
+    semantic_domain = "file management" if filesystem else "general tooling"
+    ambiguities = [tool.description] if tool.description else []
+
+    data_sources: list[DataEndpoint] = []
+    data_destinations: list[DataEndpoint] = []
+    if filesystem:
+        data_sources.append(
+            DataEndpoint(
+                name="filesystem",
+                classification=DataClassification.PRIVATE,
+                description="Local file access inferred from tool description/parameters.",
+            )
+        )
+
+    return ToolProfile(
+        tool_name=tool.name,
+        data_sources=data_sources,
+        data_destinations=data_destinations,
+        capabilities=CapabilityProfile(
+            network=network,
+            filesystem=filesystem,
+            environment=environment,
+            execution=execution,
+            software_libraries=[],
+        ),
+        semantic_domain=semantic_domain,
+        description_ambiguities=ambiguities,
+    )
 
 
 def _build_profile(tool_name: str, data: dict) -> ToolProfile:

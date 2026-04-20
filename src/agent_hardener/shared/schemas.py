@@ -116,11 +116,18 @@ class HarmCategory(str, Enum):
     SEXUAL_CONTENT = "sexual_content"
 
 
+class AttackIntensity(str, Enum):
+    EASY = "easy"
+    MEDIUM = "medium"
+    STRONG = "strong"
+
+
 class AdversarialPrompt(BaseModel):
     """One adversarial prompt targeting a specific harm category."""
 
     harm_category: HarmCategory
     tool_targeted: str
+    attack_intensity: AttackIntensity = AttackIntensity.EASY
     attack_chain: list[str] = Field(description="Ordered list of tool names in the attack sequence")
     prompt_text: str = Field(description="The adversarial task prompt (appears benign on surface)")
     grading_criteria: dict[str, Any] = Field(
@@ -174,6 +181,7 @@ class AttackRecord(BaseModel):
     record_id: str = Field(description="Unique ID, e.g., 'ATK-001-cybercrime'")
     harm_category: HarmCategory
     tool_targeted: str
+    attack_intensity: AttackIntensity = AttackIntensity.EASY
     attack_chain: list[str]
     final_prompt_used: str
     attempt_number_of_success: Optional[int] = None

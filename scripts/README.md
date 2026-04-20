@@ -85,6 +85,22 @@ uv run agent-hardener analyze `
   --agent-endpoint https://your-server.com:8080
 ```
 
+### Batch evaluate all discovered tools (defensive)
+
+```powershell
+uv run python scripts/run_live_mcp_eval.py https://your-server.com:8080 `
+  --config config.yaml `
+  --hardening-rounds 1 `
+  --per-tool-timeout-sec 900
+```
+
+This will:
+- Discover tools from `/tools/list`
+- Save tool schemas to `hardener_output/live_mcp_eval/discovered_tools/`
+- Run `agent-hardener harden` per tool
+- Enforce a timeout per tool and mark stalled runs as `TIMEOUT`
+- Write per-tool logs and a final `live_eval_summary.json`
+
 ---
 
 ## MCP Server Requirements

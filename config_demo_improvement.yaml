@@ -1,0 +1,16 @@
+default_model: ollama/gemma4:31b
+openai_api_key: ""
+anthropic_api_key: ""
+azure_api_key: ""
+azure_api_base: ""
+azure_api_version: ""
+ollama_base_url:
+agent_endpoint: http://127.0.0.1:8080
+agent_auth_token: ""
+agent_transport: http
+max_iterations: 2
+attack_parallelism: 1
+attack_success_threshold: 0.3
+grader_model: ""
+output_dir: ./hardener_output
+hardening_rounds: 3

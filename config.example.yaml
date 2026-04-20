@@ -8,6 +8,10 @@
 #   openai/gpt-4o
 #   anthropic/claude-3-5-sonnet-20241022
 #   ollama/llama3.2
+#   ollama/qwen3.5          ← Recommended for speed + quality
+#   ollama/gemma4           ← Recommended for grading (more conservative)
+#   ollama/qwen3.5:70b      ← Larger Qwen for complex scenarios
+#   ollama/gemma4:13b       ← Larger Gemma for maximum accuracy
 #   azure/gpt-4o (requires azure_api_base + azure_api_version)
 # For Ollama via Cloudflare tunnel:
 #   default_model: "ollama/<your_model_name>"
@@ -20,7 +24,7 @@ azure_api_key: "" # or set AZURE_API_KEY env var
 azure_api_base: "" # e.g., https://mydeployment.openai.azure.com/
 azure_api_version: "" # e.g., 2024-02-01
 ollama_base_url: "http://localhost:11434" # local Ollama or Cloudflare tunnel base URL
-# Example tunnel URL (paste yours here):
+# Example Ollama via Cloudflare tunnel (paste yours here after: cloudflared tunnel --url http://localhost:11434):
 # ollama_base_url: "https://<your-subdomain>.trycloudflare.com"
 
 # ── Target Agent Endpoint ─────────────────────────────────────────────────────
@@ -39,7 +43,68 @@ agent_transport: "http"
 # ── Pipeline Settings ─────────────────────────────────────────────────────────
 max_iterations: 6 # Max refinement iterations per attack (Stage 1.3)
 attack_success_threshold: 0.95 # Score above which an attack is marked SUCCESS
+hardening_rounds: 3 # Number of attack-test-policy rounds to repeat in hardening mode
+hardening_target_success_rate: 0.0 # Stop hardening once success rate is at or below this value
 grader_model: "" # Override model for LLM-as-judge. Defaults to default_model.
+# Examples:
+#   grader_model: "ollama/gemma4:8b"  # Use Gemma for grading while generating with Qwen
+#   grader_model: "openai/gpt-4-turbo"  # Use GPT-4 turbo for grading
 
 # ── Output Settings ───────────────────────────────────────────────────────────
 output_dir: "./hardener_output" # Default output directory for reports
+
+# ════════════════════════════════════════════════════════════════════════════════
+# MODEL-SPECIFIC EXAMPLES
+# ════════════════════════════════════════════════════════════════════════════════
+
+# Example 1: Using Qwen 3.5 (Fast, high-quality adversarial prompts)
+# ────────────────────────────────────────────────────────────────────────────────
+# default_model: "ollama/qwen3.5"
+# ollama_base_url: "http://localhost:11434"
+# agent_endpoint: "http://localhost:8080/run"
+# max_iterations: 6
+# attack_success_threshold: 0.95
+# hardening_rounds: 3
+# hardening_target_success_rate: 0.0
+
+# Example 2: Using Gemma 4 (Conservative, reliable)
+# ────────────────────────────────────────────────────────────────────────────────
+# default_model: "ollama/gemma4:8b"
+# ollama_base_url: "http://localhost:11434"
+# agent_endpoint: "http://localhost:8080/run"
+# max_iterations: 6
+# attack_success_threshold: 0.95
+# hardening_rounds: 3
+# hardening_target_success_rate: 0.0
+
+# Example 3: Qwen + Gemma (Qwen for generation, Gemma for grading)
+# ────────────────────────────────────────────────────────────────────────────────
+# default_model: "ollama/qwen3.5"
+# grader_model: "ollama/gemma4:8b"
+# ollama_base_url: "http://localhost:11434"
+# agent_endpoint: "http://localhost:8080/run"
+# max_iterations: 6
+
+# Example 4: Larger models for production-grade testing
+# ────────────────────────────────────────────────────────────────────────────────
+# default_model: "ollama/qwen3.5:13b"
+# grader_model: "ollama/gemma4:13b"
+# ollama_base_url: "http://localhost:11434"
+# agent_endpoint: "http://localhost:8080/run"
+# max_iterations: 8
+
+# Example 5: Remote Ollama via Cloudflare tunnel
+# ────────────────────────────────────────────────────────────────────────────────
+# default_model: "ollama/qwen3.5"
+# ollama_base_url: "https://your-tunnel-subdomain.trycloudflare.com"
+# agent_endpoint: "https://your-agent-subdomain.trycloudflare.com"
+# max_iterations: 6
+
+# Example 6: Mixed cloud + local (OpenAI for generation, local Gemma for grading)
+# ────────────────────────────────────────────────────────────────────────────────
+# default_model: "openai/gpt-4o"
+# grader_model: "ollama/gemma4:8b"
+# openai_api_key: "sk-..."
+# ollama_base_url: "http://localhost:11434"
+# agent_endpoint: "http://localhost:8080/run"
+

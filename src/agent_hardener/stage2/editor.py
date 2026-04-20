@@ -82,6 +82,7 @@ def recommend_edits(
     synthesis: CrossAttackSummary,
     records: list[AttackRecord],
     llm: LLMProvider,
+    success_threshold: float = 0.5,
 ) -> list[EditRecommendation]:
     """Generate one edit recommendation per vulnerability finding.
 
@@ -95,7 +96,7 @@ def recommend_edits(
     Returns:
         List of EditRecommendation objects, one per finding.
     """
-    successful_ids = {r.record_id for r in records if r.final_score > 0.5}
+    successful_ids = {r.record_id for r in records if r.final_score > success_threshold}
     if not successful_ids:
         return []
 

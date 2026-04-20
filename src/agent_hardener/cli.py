@@ -82,6 +82,13 @@ def analyze(
         max=10,
         help="Maximum refinement iterations per attack (overrides config file).",
     ),
+    attack_parallelism: Optional[int] = typer.Option(
+        None,
+        "--attack-parallelism",
+        min=1,
+        max=8,
+        help="Maximum number of attack cycles to run concurrently.",
+    ),
     agent_endpoint: Optional[str] = typer.Option(
         None,
         "--agent-endpoint",
@@ -139,6 +146,8 @@ def analyze(
             settings = settings.model_copy(update={"default_model": provider})
         if max_iterations is not None:
             settings = settings.model_copy(update={"max_iterations": max_iterations})
+        if attack_parallelism is not None:
+            settings = settings.model_copy(update={"attack_parallelism": attack_parallelism})
         if agent_endpoint:
             settings = settings.model_copy(update={"agent_endpoint": agent_endpoint})
     except Exception as exc:
@@ -159,6 +168,7 @@ def analyze(
     console.print(f"[bold]Model:[/] {settings.default_model}")
     console.print(f"[bold]Agent endpoint:[/] {settings.agent_endpoint}")
     console.print(f"[bold]Max iterations:[/] {settings.max_iterations}")
+    console.print(f"[bold]Attack parallelism:[/] {settings.attack_parallelism}")
     console.print(f"[bold]Stage 1 only:[/] {'yes' if stage1_only else 'no'}")
     console.print(f"[bold]Output dir:[/] {output_dir}\n")
 
@@ -245,7 +255,8 @@ def analyze(
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task(f"Running {len(adversarial_prompts)} attack cycles in parallel...", total=len(adversarial_prompts))
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(adversarial_prompts))) as executor:
+        workers = max(1, min(len(adversarial_prompts), settings.attack_parallelism))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(_run_single_attack, (i, p))
                 for i, p in enumerate(adversarial_prompts)
@@ -265,7 +276,7 @@ def analyze(
     attack_records.sort(key=lambda r: r.record_id)
 
     for record in attack_records:
-        score_color = "red" if record.final_score > 0.95 else "yellow" if record.final_score > 0.5 else "green"
+        score_color = "red" if record.final_score > settings.attack_success_threshold else "yellow" if record.final_score > 0 else "green"
         success_text = f"[red]YES @ P{record.attempt_number_of_success}[/]" if record.attempt_number_of_success is not None else "[green]NO[/]"
         n_iters = len(record.attack_trajectory)
         refusal_text = f"[green]P{record.refusal_attempt_number}[/]" if record.refusal_occurred else "[dim]No[/]"
@@ -282,8 +293,11 @@ def analyze(
     console.print()
     console.print(attack_table)
 
-    n_succeeded = sum(1 for r in attack_records if r.final_score > 0.5)
-    console.print(f"\n  [bold]Stage 1 complete:[/] {n_succeeded}/{len(attack_records)} attacks successful (score > 0.5)")
+    n_succeeded = sum(1 for r in attack_records if r.final_score > settings.attack_success_threshold)
+    console.print(
+        f"\n  [bold]Stage 1 complete:[/] {n_succeeded}/{len(attack_records)} attacks successful "
+        f"(score > {settings.attack_success_threshold:.2f})"
+    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # STAGE 2
@@ -300,13 +314,25 @@ def analyze(
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Synthesising cross-attack patterns...", total=None)
-        synthesis = synthesize(attack_records, findings, llm)
+        synthesis = synthesize(
+            attack_records,
+            findings,
+            llm,
+            success_threshold=settings.attack_success_threshold,
+        )
         prog.update(t, description=f"[green]Primary exploit vector:[/] {synthesis.primary_exploit_vector.value}")
         prog.stop_task(t)
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Generating documentation edit recommendations...", total=None)
-        edits = recommend_edits(tool, findings, synthesis, attack_records, llm)
+        edits = recommend_edits(
+            tool,
+            findings,
+            synthesis,
+            attack_records,
+            llm,
+            success_threshold=settings.attack_success_threshold,
+        )
         prog.update(t, description=f"[green]{len(edits)} edit recommendations produced[/]")
         prog.stop_task(t)
 
@@ -320,7 +346,13 @@ def analyze(
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Assigning confidentiality and capability annotations...", total=None)
-        confidentiality, capabilities = annotate(profile, stage2_report, attack_records, llm)
+        confidentiality, capabilities = annotate(
+            profile,
+            stage2_report,
+            attack_records,
+            llm,
+            success_threshold=settings.attack_success_threshold,
+        )
         prog.update(t, description=(
             f"[green]read={confidentiality.read_confidentiality.value} "
             f"write={confidentiality.write_confidentiality.value}[/]"
@@ -336,6 +368,7 @@ def analyze(
             analysis=stage2_report,
             records=attack_records,
             llm=llm,
+            success_threshold=settings.attack_success_threshold,
         )
         n_rules = len(policy.enforcement_rules)
         prog.update(t, description=f"[green]Policy built:[/] {n_rules} enforcement rules")
@@ -377,6 +410,153 @@ def analyze(
         border_style="green",
         padding=(0, 2),
     ))
+
+
+@app.command()
+def harden(
+    tool_file: Path = typer.Option(
+        ...,
+        "--tool-file", "-t",
+        help="Path to a JSON or YAML file containing the MCP-compatible tool definition.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    output_dir: Path = typer.Option(
+        Path("./hardener_output"),
+        "--output-dir", "-o",
+        help="Directory in which to write the final report and hardening history.",
+    ),
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config", "-c",
+        help="Path to a YAML config file (API keys, agent endpoint, model settings).",
+        exists=False,
+        file_okay=True,
+        dir_okay=False,
+    ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="LiteLLM model string override (e.g., 'openai/gpt-4o', 'anthropic/claude-3-5-sonnet-20241022').",
+    ),
+    max_iterations: Optional[int] = typer.Option(
+        None,
+        "--max-iterations",
+        min=1,
+        max=10,
+        help="Maximum refinement iterations per attack (overrides config file).",
+    ),
+    attack_parallelism: Optional[int] = typer.Option(
+        None,
+        "--attack-parallelism",
+        min=1,
+        max=8,
+        help="Maximum number of attack cycles to run concurrently.",
+    ),
+    hardening_rounds: Optional[int] = typer.Option(
+        None,
+        "--hardening-rounds",
+        min=1,
+        max=10,
+        help="Maximum hardening rounds to run before stopping.",
+    ),
+    hardening_target_success_rate: Optional[float] = typer.Option(
+        None,
+        "--hardening-target-success-rate",
+        min=0.0,
+        max=1.0,
+        help="Stop hardening once the successful attack rate is at or below this value.",
+    ),
+    agent_endpoint: Optional[str] = typer.Option(
+        None,
+        "--agent-endpoint",
+        help="Agent HTTP endpoint URL override (e.g., http://localhost:8080).",
+    ),
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Run the iterative hardening loop until the attack success rate drops.
+
+    This mode repeats attack generation, test execution, and policy implementation
+    across multiple rounds, feeding the generated policy back into the next pass.
+    """
+    from agent_hardener.shared.settings import Settings
+    from agent_hardener.shared.llm_provider import LLMProvider
+    from agent_hardener.shared.agent_client import AgentClient
+    from agent_hardener.hardening import run_hardening_pipeline
+
+    console.print(Panel(
+        f"[bold cyan]agent-hardener[/] [dim]v{__version__}[/]\n"
+        "[dim]Iterative hardening loop[/]",
+        border_style="cyan",
+        padding=(0, 2),
+    ))
+
+    try:
+        if config_file and config_file.exists():
+            settings = Settings.from_yaml(config_file)
+            console.print(f"[dim]Config loaded from:[/] {config_file}")
+        else:
+            settings = Settings()
+        if provider:
+            settings = settings.model_copy(update={"default_model": provider})
+        if max_iterations is not None:
+            settings = settings.model_copy(update={"max_iterations": max_iterations})
+        if attack_parallelism is not None:
+            settings = settings.model_copy(update={"attack_parallelism": attack_parallelism})
+        if hardening_rounds is not None:
+            settings = settings.model_copy(update={"hardening_rounds": hardening_rounds})
+        if hardening_target_success_rate is not None:
+            settings = settings.model_copy(update={"hardening_target_success_rate": hardening_target_success_rate})
+        if agent_endpoint:
+            settings = settings.model_copy(update={"agent_endpoint": agent_endpoint})
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR loading settings:[/] {exc}")
+        raise typer.Exit(1)
+
+    try:
+        tool = _load_tool_definition(tool_file)
+        if not tool.target_agent_endpoint:
+            tool = tool.model_copy(update={"target_agent_endpoint": settings.agent_endpoint})
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR loading tool definition:[/] {exc}")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]Tool:[/] [cyan]{tool.name}[/]")
+    console.print(f"[bold]Model:[/] {settings.default_model}")
+    console.print(f"[bold]Agent endpoint:[/] {settings.agent_endpoint}")
+    console.print(f"[bold]Max iterations:[/] {settings.max_iterations}")
+    console.print(f"[bold]Attack parallelism:[/] {settings.attack_parallelism}")
+    console.print(f"[bold]Hardening rounds:[/] {settings.hardening_rounds}")
+    console.print(f"[bold]Hardening target success rate:[/] {settings.hardening_target_success_rate:.2f}")
+    console.print(f"[bold]Output dir:[/] {output_dir}\n")
+
+    try:
+        llm = LLMProvider(settings)
+        agent = AgentClient(settings)
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR initialising LLM/agent client:[/] {exc}")
+        raise typer.Exit(1)
+
+    try:
+        json_path, html_path, history_path = run_hardening_pipeline(
+            tool=tool,
+            settings=settings,
+            llm=llm,
+            agent=agent,
+            output_dir=output_dir,
+            console=console,
+            err_console=err_console,
+        )
+    finally:
+        agent.close()
 
 
 # ── Helper: load tool definition from YAML or JSON ───────────────────────────

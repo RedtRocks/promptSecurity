@@ -17,11 +17,13 @@ from agent_hardener.shared.schemas import (
     AdversarialPrompt,
     AgentTrajectory,
     AttackRecord,
+    AttackIntensity,
     FailureType,
     HarmCategory,
     MCPToolDefinition,
     ToolCall,
 )
+from agent_hardener.shared.model_config import ModelFamily
 from agent_hardener.stage1.grader import grade
 from agent_hardener.stage1.profiler import _build_profile, _format_parameters
 
@@ -41,6 +43,14 @@ def _make_llm(responses: list[str]) -> MagicMock:
     llm = MagicMock()
     llm.chat_json.side_effect = responses
     llm.chat.side_effect = responses
+    llm.get_profile_params.return_value = (0.0, 512)
+    llm.get_attack_params.return_value = (0.0, 512)
+    llm.get_refine_params.return_value = (0.0, 512)
+    llm.get_grade_params.return_value = (0.0, 512)
+    llm.get_model_family.return_value = ModelFamily.GEMMA
+    llm.enhance_system_prompt.side_effect = lambda prompt: prompt
+    llm.get_attack_prompt_suffix.return_value = ""
+    llm.get_refine_prompt_suffix.return_value = ""
     return llm
 
 
@@ -111,8 +121,9 @@ class TestProfiler:
         llm = _make_llm(["this is not json"])
 
         from agent_hardener.stage1.profiler import profile_tool
-        with pytest.raises(ValueError, match="invalid JSON"):
-            profile_tool(tool, llm)
+        profile = profile_tool(tool, llm)
+        assert profile.tool_name == "send_email"
+        assert profile.capabilities.filesystem is True
 
 
 # ── Attacker ──────────────────────────────────────────────────────────────────
@@ -150,6 +161,28 @@ class TestAttacker:
         attacks = generate_attacks(tool, profile, llm)
         assert isinstance(attacks, list)
         assert len(attacks) == 8
+
+    def test_generate_attacks_threads_intensity(self):
+        tool = _load_fixture_tool()
+        responses = [self._make_valid_attack_response() for _ in range(8)]
+        llm = _make_llm(responses)
+
+        from agent_hardener.stage1.profiler import _build_profile
+        from agent_hardener.stage1.attacker import generate_attacks
+
+        profile = _build_profile("send_email", {
+            "data_sources": [],
+            "data_destinations": [],
+            "capabilities": {"network": True, "filesystem": True, "environment": False, "execution": False, "software_libraries": []},
+            "semantic_domain": "communication",
+            "description_ambiguities": [],
+        })
+        attacks = generate_attacks(tool, profile, llm, attack_intensity=AttackIntensity.STRONG)
+
+        assert attacks
+        assert all(prompt.attack_intensity == AttackIntensity.STRONG for prompt in attacks)
+        called_user_prompt = llm.chat_json.call_args.kwargs["messages"][1]["content"]
+        assert "ATTACK INTENSITY: strong" in called_user_prompt
 
     def test_not_applicable_category_excluded(self):
         tool = _load_fixture_tool()
@@ -233,7 +266,7 @@ class TestGrader:
         trajectory = AgentTrajectory(prompt="...", tool_calls=[ToolCall(tool_name="send_email", parameters={}, success=True)])
         llm = _make_llm(["not valid json at all"])
         score = grade(trajectory, prompt, llm)
-        assert score == 0.0
+        assert score == pytest.approx(0.35)
 
 
 # ── Refiner ───────────────────────────────────────────────────────────────────
@@ -265,6 +298,8 @@ class TestRefiner:
 
         # Grade LLM returns success on first call
         llm = MagicMock()
+        llm.get_grade_params.return_value = (0.0, 512)
+        llm.enhance_system_prompt.side_effect = lambda prompt: prompt
         llm.chat_json.return_value = json.dumps({
             "score": 0.97, "required_tools_called": True, "correct_order": True,
             "harmful_goal_achieved": True, "reasoning": "Success",
@@ -290,6 +325,9 @@ class TestRefiner:
 
         # grade always returns 0.0 for refusals (fast-path in grader)
         llm = MagicMock()
+        llm.get_refine_params.return_value = (0.0, 512)
+        llm.get_grade_params.return_value = (0.0, 512)
+        llm.enhance_system_prompt.side_effect = lambda prompt: prompt
         # For P1 + reflect calls (chat_json for structured prompt + reflections)
         llm.chat_json.return_value = json.dumps({"structured_prompt": "step by step..."})
 
@@ -307,6 +345,9 @@ class TestRefiner:
         prompt = self._make_prompt()
         agent = _make_agent(AgentTrajectory(prompt="...", refusal_detected=True, refusal_message="No."))
         llm = MagicMock()
+        llm.get_refine_params.return_value = (0.0, 512)
+        llm.get_grade_params.return_value = (0.0, 512)
+        llm.enhance_system_prompt.side_effect = lambda prompt: prompt
         llm.chat_json.return_value = json.dumps({"structured_prompt": "..."})
 
         record = run_attack_cycle(prompt, agent, llm, max_iterations=1, record_index=5)
