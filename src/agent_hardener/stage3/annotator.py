@@ -61,10 +61,13 @@ ASSIGNMENT TASK:
 
 1. read_confidentiality: Set "high" if the tool reads from ANY private, authenticated,
    or user-scoped data source. Set "low" ONLY if ALL data sources are demonstrably public.
+   When uncertain, default to "high" so the gateway fails secure.
 
 2. write_confidentiality: Set "high" if the tool writes to ANY destination that could
    expose private data externally, post publicly, communicate to third parties, or
    modify persistent state accessible outside the current session.
+   Set "low" for public sinks such as public repositories, outbound email to arbitrary
+   recipients, web posts, or external APIs where high-taint data must not flow.
 
 3. For each capability, assign the minimum necessary scope:
    - network: false, OR a list of specific allowed FQDNs/CIDR ranges only (not broad internet).

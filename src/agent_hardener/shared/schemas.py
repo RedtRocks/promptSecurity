@@ -322,6 +322,46 @@ class DeploymentSpec(BaseModel):
     container_enforcements: list[ContainerEnforcement] = Field(default_factory=list)
 
 
+class ToolAnnotation(BaseModel):
+    """Runtime SAMOS gateway annotation for one registered MCP tool."""
+
+    name: str
+    description: str = ""
+    read_confidentiality: ConfidentialityLevel
+    write_confidentiality: ConfidentialityLevel
+    network: Any = False
+    filesystem: Any = False
+    environment: Any = False
+    execution: Any = False
+    software_libraries: Any = False
+
+
+class GatewayPolicyRule(BaseModel):
+    rule_id: str
+    trigger_condition: str
+    action: EnforcementAction
+    reason: str
+
+
+class RedAgentFeedbackSchema(BaseModel):
+    required_fields: list[str] = Field(default_factory=list)
+    attack_types: list[str] = Field(default_factory=list)
+    succeeded_only_for_hardening: bool = True
+    hardening_actions: list[str] = Field(default_factory=list)
+
+
+class GatewayEnforcementSpec(BaseModel):
+    """Concrete SAMOS gateway behavior derived from generated policy evidence."""
+
+    tool_annotation: ToolAnnotation
+    session_initial_taint: TaintLevel
+    taint_is_monotonic: bool = True
+    fail_secure_unknown_tools: bool = True
+    policy_log_required: bool = True
+    core_policy_rules: list[GatewayPolicyRule] = Field(default_factory=list)
+    red_agent_feedback_schema: RedAgentFeedbackSchema = Field(default_factory=RedAgentFeedbackSchema)
+
+
 class PolicyCoverage(BaseModel):
     attacks_fully_blocked_by_policy: int = 0
     attacks_partially_mitigated: int = 0
@@ -339,5 +379,6 @@ class SAMOSPolicy(BaseModel):
     capability_annotations: CapabilityAnnotations
     session_taint_rules: SessionTaintRules
     enforcement_rules: list[EnforcementRule] = Field(default_factory=list)
+    gateway_enforcement: GatewayEnforcementSpec
     deployment_spec: DeploymentSpec
     policy_coverage: PolicyCoverage

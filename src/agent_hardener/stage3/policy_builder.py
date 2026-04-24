@@ -21,11 +21,15 @@ from agent_hardener.shared.schemas import (
     EnforcementAction,
     EnforcementRule,
     FailureAnalysisReport,
+    GatewayEnforcementSpec,
+    GatewayPolicyRule,
     PolicyCoverage,
+    RedAgentFeedbackSchema,
     SAMOSPolicy,
     SessionTaintRules,
     TaintLevel,
     TaintPropagationRule,
+    ToolAnnotation,
 )
 from agent_hardener.stage3.deployment import build_deployment_spec
 
@@ -165,6 +169,15 @@ def build_policy(
     # Step 3.5 — Deployment spec
     deployment = build_deployment_spec(capabilities)
 
+    gateway_enforcement = _build_gateway_enforcement(
+        tool_name=tool_name,
+        confidentiality=confidentiality,
+        capabilities=capabilities,
+        taint_rules=taint_rules,
+        enforcement_rules=enforcement_rules,
+        successful_records=successful_records,
+    )
+
     # Policy coverage accounting
     coverage = _compute_coverage(
         successful_records=successful_records,
@@ -182,6 +195,7 @@ def build_policy(
         capability_annotations=capabilities,
         session_taint_rules=taint_rules,
         enforcement_rules=enforcement_rules,
+        gateway_enforcement=gateway_enforcement,
         deployment_spec=deployment,
         policy_coverage=coverage,
     )
@@ -368,6 +382,131 @@ def _build_enforcement_rules(
             motivated_by_attack=motivated_by,
         )
     ]
+
+
+def _build_gateway_enforcement(
+    tool_name: str,
+    confidentiality: ConfidentialityAnnotations,
+    capabilities: CapabilityAnnotations,
+    taint_rules: SessionTaintRules,
+    enforcement_rules: list[EnforcementRule],
+    successful_records: list[AttackRecord],
+) -> GatewayEnforcementSpec:
+    annotation = ToolAnnotation(
+        name=tool_name,
+        description=(
+            "SAMOS runtime annotation generated from red-team attack cycles. "
+            "Register this with the gateway before exposing the MCP tool."
+        ),
+        read_confidentiality=confidentiality.read_confidentiality,
+        write_confidentiality=confidentiality.write_confidentiality,
+        network=capabilities.network,
+        filesystem=capabilities.filesystem,
+        environment=capabilities.environment,
+        execution=capabilities.execution,
+        software_libraries=capabilities.software_libraries,
+    )
+
+    core_rules = [
+        GatewayPolicyRule(
+            rule_id="IFC-001-HIGH-TO-LOW",
+            trigger_condition=(
+                "session.taint_level == 'high' and "
+                f"tool.write_confidentiality == '{ConfidentialityLevel.LOW.value}'"
+            ),
+            action=EnforcementAction.BLOCK,
+            reason=(
+                "High-tainted sessions must not write to low-confidentiality sinks. "
+                "This is the primary SAMOS exfiltration guard."
+            ),
+        ),
+        GatewayPolicyRule(
+            rule_id="IFC-002-UNKNOWN-TOOL",
+            trigger_condition="tool_name not in gateway.tool_registry",
+            action=EnforcementAction.BLOCK,
+            reason="Fail secure when the MCP client requests an unregistered tool.",
+        ),
+    ]
+
+    if capabilities.network is True:
+        core_rules.append(
+            GatewayPolicyRule(
+                rule_id="IFC-003-TAINTED-UNRESTRICTED-NETWORK",
+                trigger_condition="session.taint_level == 'high' and tool.network is True",
+                action=EnforcementAction.BLOCK,
+                reason="Tainted sessions cannot call tools with unrestricted network egress.",
+            )
+        )
+
+    if capabilities.filesystem is True:
+        core_rules.append(
+            GatewayPolicyRule(
+                rule_id="IFC-004-TAINTED-UNRESTRICTED-FILESYSTEM",
+                trigger_condition="session.taint_level == 'high' and tool.filesystem is True",
+                action=EnforcementAction.BLOCK,
+                reason="Tainted sessions cannot call tools with unrestricted filesystem access.",
+            )
+        )
+
+    for rule in enforcement_rules:
+        core_rules.append(
+            GatewayPolicyRule(
+                rule_id=f"GW-{rule.rule_id}",
+                trigger_condition=rule.trigger_condition,
+                action=rule.action,
+                reason=rule.reason,
+            )
+        )
+
+    for record in successful_records:
+        core_rules.append(
+            GatewayPolicyRule(
+                rule_id=f"IFC-ATTACK-{record.record_id}",
+                trigger_condition=(
+                    "session.tool_call_history followed by attempted tool call matches "
+                    f"{record.attack_chain}"
+                ),
+                action=EnforcementAction.BLOCK,
+                reason=(
+                    f"Blocks red-agent path {record.record_id} "
+                    f"({record.harm_category.value}) observed at score {record.final_score:.2f}."
+                ),
+            )
+        )
+
+    feedback_schema = RedAgentFeedbackSchema(
+        required_fields=[
+            "attack_type",
+            "tool_sequence",
+            "sensitive_tool",
+            "exfil_tool",
+            "succeeded",
+        ],
+        attack_types=[
+            "prompt_injection",
+            "cross_tool_exfil",
+            "tool_poisoning",
+            "capability_abuse",
+            "boundary_bypass",
+        ],
+        succeeded_only_for_hardening=True,
+        hardening_actions=[
+            "Escalate sensitive_tool read_confidentiality to high.",
+            "Mark exfil_tool write_confidentiality as low when it is a public sink.",
+            "Tighten exploited network/filesystem/environment/execution capability scopes.",
+            "Preserve the successful tool_sequence as a gateway regression test.",
+        ],
+    )
+
+    return GatewayEnforcementSpec(
+        tool_annotation=annotation,
+        session_initial_taint=taint_rules.initial_session_taint,
+        taint_is_monotonic=True,
+        fail_secure_unknown_tools=True,
+        policy_log_required=True,
+        core_policy_rules=core_rules,
+        red_agent_feedback_schema=feedback_schema,
+    )
 
 
 def _check_caps_block_attack(caps: CapabilityAnnotations, record: AttackRecord) -> bool:

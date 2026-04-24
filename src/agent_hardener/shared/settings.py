@@ -3,6 +3,7 @@ variables (UPPERCASE) or a YAML config file passed with --config."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,15 @@ class Settings(BaseSettings):
         with open(yaml_path) as f:
             data = yaml.safe_load(f) or {}
 
-        # Strip empty strings so env vars can override cleanly
+        # Strip empty strings so env vars can override cleanly.
         cleaned = {k: v for k, v in data.items() if v != "" and v is not None}
-        return cls(**cleaned)
+
+        # Overlay environment values after YAML load so env vars take precedence.
+        merged = dict(cleaned)
+        for field_name, field_info in cls.model_fields.items():
+            env_name = field_info.alias or field_name.upper()
+            env_value = os.environ.get(env_name)
+            if env_value is not None and env_value != "":
+                merged[field_name] = env_value
+
+        return cls(**merged)

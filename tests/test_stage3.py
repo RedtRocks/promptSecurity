@@ -345,8 +345,64 @@ class TestPolicyBuilder:
         assert "capability_annotations" in data
         assert "session_taint_rules" in data
         assert "enforcement_rules" in data
+        assert "gateway_enforcement" in data
         assert "deployment_spec" in data
         assert "policy_coverage" in data
+
+    def test_policy_includes_runtime_gateway_spec(self):
+        from agent_hardener.stage3.policy_builder import build_policy
+
+        conf = ConfidentialityAnnotations(
+            read_confidentiality=ConfidentialityLevel.HIGH,
+            write_confidentiality=ConfidentialityLevel.LOW,
+            read_justification="Reads private repository contents.",
+            write_justification="Writes to a public sink.",
+        )
+        caps = CapabilityAnnotations(
+            network=True,
+            filesystem=False,
+            environment=False,
+            execution=False,
+            software_libraries=False,
+        )
+        analysis = _make_analysis(attacks_succeeded=1, total=1)
+        records = _make_records(n=1, score=0.98)
+
+        llm = MagicMock()
+        llm.chat_json.side_effect = [
+            json.dumps({
+                "initial_session_taint": "high",
+                "taint_propagation_rules": [
+                    {
+                        "rule_description": "Block high-to-low exfiltration",
+                        "from_taint": "high",
+                        "action": "BLOCK",
+                        "motivated_by_attack_chain": ["read_file", "send_email"],
+                    }
+                ],
+            }),
+            json.dumps([]),
+        ]
+
+        policy = build_policy("read_file", conf, caps, analysis, records, llm)
+        gateway = policy.gateway_enforcement
+
+        assert gateway.tool_annotation.name == "read_file"
+        assert gateway.tool_annotation.read_confidentiality == ConfidentialityLevel.HIGH
+        assert gateway.tool_annotation.write_confidentiality == ConfidentialityLevel.LOW
+        assert gateway.tool_annotation.network is True
+        assert gateway.session_initial_taint == TaintLevel.HIGH
+        assert gateway.taint_is_monotonic is True
+        assert gateway.fail_secure_unknown_tools is True
+        assert gateway.policy_log_required is True
+
+        rule_ids = {rule.rule_id for rule in gateway.core_policy_rules}
+        assert "IFC-001-HIGH-TO-LOW" in rule_ids
+        assert "IFC-002-UNKNOWN-TOOL" in rule_ids
+        assert "IFC-003-TAINTED-UNRESTRICTED-NETWORK" in rule_ids
+        assert f"IFC-ATTACK-{records[0].record_id}" in rule_ids
+        assert "sensitive_tool" in gateway.red_agent_feedback_schema.required_fields
+        assert gateway.red_agent_feedback_schema.succeeded_only_for_hardening is True
 
     def test_policy_coverage_accounting(self):
         from agent_hardener.stage3.policy_builder import build_policy
