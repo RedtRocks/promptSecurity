@@ -105,3 +105,20 @@ If you run with `--stage1-only`, output includes:
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
+
+## CUDA Showcase
+
+This repository now includes a native CUDA C/C++ showcase in [cuda_showcase/](cuda_showcase/) that benchmarks a report-derived aggregation workload with CPU and GPU paths.
+
+When the pipeline is using an Ollama-backed model on a CUDA-capable server, it will prefer a local Ollama daemon on `http://localhost:11434` if one is reachable; otherwise it keeps using the configured `ollama_base_url`.
+
+Build and run it from that directory:
+
+```bash
+make cpu
+make gpu
+python tools/export_metrics_input.py ..\hardener_output --output data\benchmark_input.csv --success-threshold 0.95
+bin\benchmark_cuda --mode compare --input data\benchmark_input.csv --threshold 0.95 --block-size 256
+```
+
+Use `--mode cpu` on machines without a CUDA-capable GPU.

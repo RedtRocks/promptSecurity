@@ -7,6 +7,8 @@ Includes model-specific optimizations for Qwen, Gemma, and other open-source mod
 from __future__ import annotations
 
 import os
+import subprocess
+import shutil
 from typing import Any, Optional
 
 import litellm
@@ -35,6 +37,7 @@ class LLMProvider:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._configure_env(settings)
+        self._resolved_ollama_base_url = self._resolve_ollama_base_url()
         # Build a Router for automatic retry/fallback
         self._router = self._build_router(settings)
         
@@ -59,8 +62,11 @@ class LLMProvider:
         _set_if_nonempty("AZURE_API_KEY", s.azure_api_key)
         _set_if_nonempty("AZURE_API_BASE", s.azure_api_base)
         _set_if_nonempty("AZURE_API_VERSION", s.azure_api_version)
-        if s.ollama_base_url and _uses_ollama_model(s):
-            litellm.api_base = s.ollama_base_url.rstrip("/")
+        if _uses_ollama_model(s):
+            # Keep LiteLLM pointed at the currently configured Ollama endpoint.
+            # Direct Ollama calls below may still switch to localhost when a GPU server
+            # exposes a local Ollama daemon.
+            litellm.api_base = s.ollama_base_url.rstrip("/") if s.ollama_base_url else None
         else:
             # Prevent stale global api_base from affecting non-Ollama providers.
             litellm.api_base = None
@@ -173,7 +179,7 @@ class LLMProvider:
         response_format: Optional[dict[str, Any]] = None,
     ) -> str:
         """Call the Ollama HTTP API directly so we can control think/format behavior."""
-        base_url = self._settings.ollama_base_url.rstrip("/")
+        base_url = self._resolved_ollama_base_url
         model = model_name.split("/", 1)[1] if "/" in model_name else model_name
         payload: dict[str, Any] = {
             "model": model,
@@ -203,6 +209,56 @@ class LLMProvider:
             return str(thinking).strip()
 
         return ""
+
+    def _resolve_ollama_base_url(self) -> str:
+        """Prefer a local Ollama daemon on CUDA-capable servers, otherwise use config.
+
+        The local server is only selected when both of these are true:
+        1. A CUDA GPU is visible to the machine.
+        2. Ollama is responding on localhost:11434.
+
+        If either condition fails, the provider keeps using the configured Ollama
+        base URL so current API-backed behavior remains unchanged.
+        """
+        configured = (self._settings.ollama_base_url or "").rstrip("/")
+        local = "http://localhost:11434"
+
+        if self._cuda_gpu_available() and self._ollama_responds(local):
+            return local
+
+        if configured:
+            return configured
+
+        return local
+
+    @staticmethod
+    def _cuda_gpu_available() -> bool:
+        """Return True when an NVIDIA GPU is visible via nvidia-smi."""
+        nvidia_smi = shutil.which("nvidia-smi")
+        if not nvidia_smi:
+            return False
+
+        try:
+            result = subprocess.run(
+                [nvidia_smi, "-L"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        return result.returncode == 0 and "GPU" in (result.stdout or "")
+
+    @staticmethod
+    def _ollama_responds(base_url: str) -> bool:
+        """Return True when an Ollama server answers on the given base URL."""
+        try:
+            response = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=3)
+            return response.ok
+        except requests.RequestException:
+            return False
 
     # ── Model-specific parameter accessors ────────────────────────────────────
 

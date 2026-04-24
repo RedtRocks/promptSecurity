@@ -27,6 +27,13 @@ hardener_output/
 full_pipeline_*/
 test_output*/
 
+# CUDA showcase build/output artifacts
+cuda_showcase/bin/
+cuda_showcase/build/
+cuda_showcase/data/
+cuda_showcase/*.exe
+cuda_showcase/*.obj
+
 # Per-run report artifacts
 **/report.html
 **/report.json
