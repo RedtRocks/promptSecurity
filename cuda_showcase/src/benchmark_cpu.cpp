@@ -5,18 +5,21 @@
 
 using namespace cuda_showcase;
 
-struct CpuResult {
+struct CpuResult
+{
     Metrics metrics;
     double load_seconds = 0.0;
     double compute_seconds = 0.0;
     double total_seconds = 0.0;
 };
 
-static void print_usage() {
+static void print_usage()
+{
     std::cout << "Usage: benchmark_cpu --input <file> [--threshold <float>]\n";
 }
 
-static CpuResult run_cpu_benchmark(const std::string& input_path, float threshold) {
+static CpuResult run_cpu_benchmark(const std::string &input_path, float threshold)
+{
     const auto total_start = std::chrono::steady_clock::now();
 
     const auto load_start = std::chrono::steady_clock::now();
@@ -36,33 +39,44 @@ static CpuResult run_cpu_benchmark(const std::string& input_path, float threshol
     return result;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv)
+{
     std::string input_path;
     float threshold = 0.95f;
 
-    for (int i = 1; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i)
+    {
         const std::string arg = argv[i];
-        if (arg == "--input" && i + 1 < argc) {
+        if (arg == "--input" && i + 1 < argc)
+        {
             input_path = argv[++i];
-        } else if (arg == "--threshold" && i + 1 < argc) {
+        }
+        else if (arg == "--threshold" && i + 1 < argc)
+        {
             threshold = std::stof(argv[++i]);
-        } else if (arg == "--help" || arg == "-h") {
+        }
+        else if (arg == "--help" || arg == "-h")
+        {
             print_usage();
             return 0;
-        } else {
+        }
+        else
+        {
             std::cerr << "Unknown or incomplete argument: " << arg << '\n';
             print_usage();
             return 1;
         }
     }
 
-    if (input_path.empty()) {
+    if (input_path.empty())
+    {
         std::cerr << "Missing required --input argument\n";
         print_usage();
         return 1;
     }
 
-    try {
+    try
+    {
         const auto result = run_cpu_benchmark(input_path, threshold);
         std::cout << "mode=cpu\n";
         std::cout << "input=" << input_path << '\n';
@@ -72,7 +86,9 @@ int main(int argc, char** argv) {
         std::cout << "compute_seconds=" << result.compute_seconds << '\n';
         std::cout << "total_seconds=" << result.total_seconds << '\n';
         print_metrics(result.metrics);
-    } catch (const std::exception& exc) {
+    }
+    catch (const std::exception &exc)
+    {
         std::cerr << "CPU benchmark failed: " << exc.what() << '\n';
         return 1;
     }
