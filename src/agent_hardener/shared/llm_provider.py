@@ -175,6 +175,17 @@ class LLMProvider:
         """Call the Ollama HTTP API directly so we can control think/format behavior."""
         base_url = self._settings.ollama_base_url.rstrip("/")
         model = model_name.split("/", 1)[1] if "/" in model_name else model_name
+
+        if _uses_ollama_generate(model):
+            return self._generate_ollama(
+                base_url=base_url,
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
+
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -203,6 +214,42 @@ class LLMProvider:
             return str(thinking).strip()
 
         return ""
+
+    def _generate_ollama(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        response_format: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Call Ollama's generate endpoint for models that expect prompt-style input."""
+        prompt = _messages_to_prompt(messages)
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        if response_format and response_format.get("type") == "json_object":
+            payload["format"] = "json"
+
+        response = requests.post(f"{base_url}/api/generate", json=payload, timeout=300)
+        response.raise_for_status()
+        data = response.json()
+        content = data.get("response") or ""
+        if content:
+            return str(content).strip()
+
+        thinking = data.get("thinking") or ""
+        return str(thinking).strip()
 
     # ── Model-specific parameter accessors ────────────────────────────────────
 
@@ -284,3 +331,28 @@ def _uses_ollama_model(settings: Settings) -> bool:
     """Return True when any configured model targets the Ollama provider."""
     models = [settings.default_model, settings.grader_model]
     return any(m and m.lower().startswith("ollama/") for m in models)
+
+
+def _uses_ollama_generate(model: str) -> bool:
+    """Return True for Ollama models that should use /api/generate instead of /api/chat."""
+    normalized = model.lower()
+    return "qwen3.5:35b" in normalized
+
+
+def _messages_to_prompt(messages: list[dict[str, str]]) -> str:
+    """Convert OpenAI-style chat messages into a single prompt for generate endpoints."""
+    parts: list[str] = []
+    for message in messages:
+        role = message.get("role", "user").strip().lower()
+        content = message.get("content", "")
+        if not content:
+            continue
+        if role == "system":
+            parts.append(f"SYSTEM:\n{content}")
+        elif role == "assistant":
+            parts.append(f"ASSISTANT:\n{content}")
+        else:
+            parts.append(f"USER:\n{content}")
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\nASSISTANT:\n"

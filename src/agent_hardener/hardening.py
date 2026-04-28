@@ -218,7 +218,7 @@ def run_hardening_pipeline(
             console=console,
             err_console=err_console,
         )
-        hardening_history.append(round_result["summary"])
+        hardening_history.append(_build_round_history_entry(round_result))
         final_round = round_result
 
         learned_defense.learn_from_round(round_result)
@@ -274,6 +274,7 @@ def run_hardening_pipeline(
             analysis=final_round["stage2_report"],
             policy=final_round["policy"],
             output_dir=output_dir,
+            hardening_history=hardening_history,
         )
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
@@ -567,3 +568,64 @@ def _apply_text_edit(original: str, old_text: str | None, new_text: str, action:
         separator = "\n\n" if original.strip() else ""
         return original + separator + new_text
     return original
+
+
+def _build_round_history_entry(round_result: dict[str, Any]) -> dict[str, Any]:
+    summary = dict(round_result["summary"])
+    policy: SAMOSPolicy = round_result["policy"]
+    attack_records: list[AttackRecord] = round_result["attack_records"]
+
+    policy_summary = {
+        "confidentiality": {
+            "read": policy.confidentiality_annotations.read_confidentiality.value,
+            "write": policy.confidentiality_annotations.write_confidentiality.value,
+            "read_justification": policy.confidentiality_annotations.read_justification,
+            "write_justification": policy.confidentiality_annotations.write_justification,
+        },
+        "session_taint": policy.session_taint_rules.initial_session_taint.value,
+        "coverage": json.loads(policy.policy_coverage.model_dump_json()),
+        "enforcement_rules": [
+            {
+                "rule_id": rule.rule_id,
+                "action": rule.action.value,
+                "trigger_condition": rule.trigger_condition,
+                "reason": rule.reason,
+                "motivated_by_attack": rule.motivated_by_attack,
+            }
+            for rule in policy.enforcement_rules
+        ],
+    }
+
+    attack_rows: list[dict[str, Any]] = []
+    for record in attack_records:
+        matched_rules = [
+            rule
+            for rule in policy.enforcement_rules
+            if rule.motivated_by_attack == record.record_id
+        ]
+
+        attack_rows.append(
+            {
+                "record_id": record.record_id,
+                "harm_category": record.harm_category.value,
+                "attack_intensity": record.attack_intensity.value,
+                "attack_chain": record.attack_chain,
+                "final_score": record.final_score,
+                "attack_success": record.attempt_number_of_success is not None,
+                "final_prompt": record.final_prompt_used,
+                "policy_rule_ids": [rule.rule_id for rule in matched_rules],
+                "policy_actions": [rule.action.value for rule in matched_rules],
+                "policy_mitigated": (
+                    "yes"
+                    if record.attempt_number_of_success is not None and matched_rules
+                    else "no-explicit-rule"
+                    if record.attempt_number_of_success is not None
+                    else "not-needed"
+                ),
+            }
+        )
+
+    summary["policy_summary"] = policy_summary
+    summary["attack_rows"] = attack_rows
+    summary["policy"] = json.loads(policy.model_dump_json())
+    return summary

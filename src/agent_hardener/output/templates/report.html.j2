@@ -6,157 +6,700 @@
   <title>agent-hardener report: {{ tool.name }}</title>
   <style>
     :root {
-      --bg: #f6f8fb;
-      --panel: #ffffff;
-      --border: #dce3ee;
-      --text: #122033;
-      --muted: #5d6d83;
-      --good: #127c3a;
-      --warn: #9a6400;
-      --bad: #b42318;
-      --accent: #005cc5;
+      --bg: #08111f;
+      --bg-soft: #0d1728;
+      --panel: rgba(12, 20, 36, 0.92);
+      --panel-alt: rgba(15, 25, 43, 0.96);
+      --border: rgba(180, 199, 224, 0.18);
+      --text: #edf4ff;
+      --muted: #9aaac2;
+      --soft: #c6d2e4;
+      --good: #3ddc97;
+      --warn: #ffd166;
+      --bad: #ff7a7a;
+      --accent: #73b7ff;
+      --accent-2: #9f8cff;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
     }
+
     * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
     body {
       margin: 0;
-      background: var(--bg);
       color: var(--text);
-      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-      line-height: 1.45;
+      background:
+        radial-gradient(circle at top left, rgba(115, 183, 255, 0.18), transparent 32%),
+        radial-gradient(circle at top right, rgba(159, 140, 255, 0.16), transparent 26%),
+        linear-gradient(180deg, #050a13 0%, #08111f 35%, #0b1322 100%);
+      font-family: "Segoe UI Variable", "Segoe UI", "Trebuchet MS", sans-serif;
+      line-height: 1.5;
     }
+
     .container {
-      max-width: 1200px;
+      max-width: 1320px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 28px 20px 40px;
     }
+
     .panel {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px;
-      margin-bottom: 14px;
+      border-radius: 24px;
+      padding: 22px;
+      margin-bottom: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
     }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 10px;
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(24, 38, 63, 0.98), rgba(12, 22, 39, 0.96)),
+        radial-gradient(circle at top right, rgba(115, 183, 255, 0.22), transparent 28%);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(120deg, rgba(115, 183, 255, 0.08), transparent 45%, rgba(159, 140, 255, 0.06));
+      pointer-events: none;
+    }
+
+    .hero-grid {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 1.9fr 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    h1, h2, h3, h4 { margin: 0; }
+
+    h1 {
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      font-size: 22px;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    h4 {
+      font-size: 15px;
+      letter-spacing: -0.01em;
+      color: var(--soft);
       margin-bottom: 10px;
     }
-    h1 { margin: 0; font-size: 22px; }
-    h2 { margin: 0 0 10px 0; font-size: 17px; }
-    .meta { color: var(--muted); font-size: 12px; text-align: right; }
-    .muted { color: var(--muted); }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 18px rgba(115, 183, 255, 0.75);
+    }
+
+    .hero-copy p {
+      max-width: 860px;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .chip-easy { color: #75f0aa; }
+    .chip-medium { color: #ffd166; }
+    .chip-hard { color: #ff9b9b; }
+
     .stats {
       display: grid;
-      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 18px;
+      padding: 14px;
+    }
+
+    .stat .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .stat .value {
+      font-size: 26px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+    }
+
+    .value.good { color: var(--good); }
+    .value.warn { color: var(--warn); }
+    .value.bad { color: var(--bad); }
+
+    .panel-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .muted { color: var(--muted); }
+
+    .quick-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .quick-nav a {
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 12px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .quick-nav a:hover {
+      border-color: rgba(115, 183, 255, 0.7);
+      background: rgba(115, 183, 255, 0.12);
+    }
+
+    .round-card {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 22px;
+      background: var(--panel-alt);
+      padding: 18px;
+      margin-top: 16px;
+    }
+
+    .round-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    .round-title {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .round-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-weight: 700;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .round-kicker.easy { color: #75f0aa; }
+    .round-kicker.medium { color: #ffd166; }
+    .round-kicker.hard { color: #ff9b9b; }
+
+    .round-meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      min-width: 360px;
+    }
+
+    .mini-stat {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 10px 12px;
+    }
+
+    .mini-stat .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+
+    .mini-stat .value {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .progress-track {
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.07);
+      margin: 10px 0 18px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #3ddc97 0%, #7acbff 55%, #9f8cff 100%);
+    }
+
+    .round-grid {
+      display: grid;
+      grid-template-columns: 1.45fr 1fr;
+      gap: 16px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .prompt-card,
+    .policy-card,
+    .summary-card {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 14px;
+    }
+
+    .prompt-card .topline {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .prompt-title {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      margin-bottom: 4px;
+    }
+
+    .prompt-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .prompt-footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-top: 12px;
+    }
+
+    .score-pill,
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+
+    .score-pill.good { color: var(--good); background: rgba(61, 220, 151, 0.12); border-color: rgba(61, 220, 151, 0.24); }
+    .score-pill.warn { color: var(--warn); background: rgba(255, 209, 102, 0.12); border-color: rgba(255, 209, 102, 0.24); }
+    .score-pill.bad { color: var(--bad); background: rgba(255, 122, 122, 0.12); border-color: rgba(255, 122, 122, 0.24); }
+    .badge.good { color: var(--good); background: rgba(61, 220, 151, 0.12); border-color: rgba(61, 220, 151, 0.24); }
+    .badge.warn { color: var(--warn); background: rgba(255, 209, 102, 0.12); border-color: rgba(255, 209, 102, 0.24); }
+    .badge.bad { color: var(--bad); background: rgba(255, 122, 122, 0.12); border-color: rgba(255, 122, 122, 0.24); }
+    .badge.neutral { color: var(--accent); background: rgba(115, 183, 255, 0.12); border-color: rgba(115, 183, 255, 0.24); }
+
+    details {
+      margin-top: 8px;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--accent);
+      list-style: none;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    summary::-webkit-details-marker { display: none; }
+
+    .code {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #060b15;
+      color: #d5e5ff;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 12px;
+      margin-top: 10px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    .rule-list {
+      display: grid;
       gap: 10px;
     }
-    .stat {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
-      background: #fbfcfe;
+
+    .rule-item {
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
     }
-    .stat .label { color: var(--muted); font-size: 12px; }
-    .stat .value { font-size: 24px; font-weight: 700; margin-top: 3px; }
-    .good { color: var(--good); }
-    .warn { color: var(--warn); }
-    .bad { color: var(--bad); }
-    .badge {
-      display: inline-block;
+
+    .rule-item .rule-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .rule-item .rule-body {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .policy-grid {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .policy-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      padding: 11px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .policy-row .label {
+      color: var(--muted);
       font-size: 11px;
-      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.03em;
-      border-radius: 999px;
-      padding: 2px 9px;
-      border: 1px solid;
-      white-space: nowrap;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
     }
-    .b-good { color: var(--good); border-color: #8ad6a7; background: #e9f8ef; }
-    .b-warn { color: var(--warn); border-color: #e7c276; background: #fff7e2; }
-    .b-bad { color: var(--bad); border-color: #ef9a95; background: #fff0ef; }
-    .b-neutral { color: #23436e; border-color: #aec4e6; background: #eef4ff; }
+
+    .policy-row .value {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
     .table-wrap { overflow-x: auto; }
+
     table {
       width: 100%;
       border-collapse: collapse;
       min-width: 900px;
       font-size: 13px;
     }
+
     th, td {
       text-align: left;
       vertical-align: top;
-      border-bottom: 1px solid var(--border);
-      padding: 9px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 10px 8px;
     }
+
     th {
       color: var(--muted);
       font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.03em;
-      background: #f8fafd;
+      letter-spacing: 0.09em;
+      background: rgba(255, 255, 255, 0.03);
     }
-    details { margin-top: 6px; }
-    summary { cursor: pointer; color: var(--accent); }
-    .code {
-      white-space: pre-wrap;
-      word-break: break-word;
-      background: #0d1524;
-      color: #d6e7ff;
-      border-radius: 8px;
-      padding: 10px;
-      font-family: Consolas, "Courier New", monospace;
+
+    .foot {
+      color: var(--muted);
       font-size: 12px;
-      margin-top: 6px;
+      text-align: center;
+      margin-top: 12px;
     }
-    .list { margin: 0; padding-left: 18px; }
-    .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 10px; }
-    @media (max-width: 900px) {
-      .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
-      .meta { text-align: left; }
-      .header { flex-direction: column; }
+
+    @media (max-width: 1080px) {
+      .hero-grid,
+      .round-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .round-meta {
+        min-width: 0;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .container { padding: 16px 12px 28px; }
+      .panel { padding: 16px; border-radius: 18px; }
+      .stats { grid-template-columns: 1fr; }
+      .round-meta { grid-template-columns: 1fr; }
+      .round-head { flex-direction: column; }
+      .quick-nav { gap: 8px; }
     }
   </style>
 </head>
 <body>
 <div class="container">
 
-  <div class="panel">
-    <div class="header">
+  <section class="panel hero">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <div class="eyebrow">Sequential hardening showcase</div>
+        <h1>agent-hardener</h1>
+        <p>
+          This report walks from easy prompts to medium and then hard prompts, showing how each round
+          feeds the next policy update until the tool becomes harder to exploit.
+        </p>
+        <div class="chip-row">
+          <span class="chip chip-easy">Easy prompts first</span>
+          <span class="chip chip-medium">Medium difficulty next</span>
+          <span class="chip chip-hard">Hard prompts last</span>
+        </div>
+
+        {% if hardening_showcase %}
+        <div class="quick-nav">
+          {% for round in hardening_showcase %}
+            <a href="#round-{{ round.round }}">Round {{ round.round }} · {{ round.attack_intensity_label }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="label">Tool</div>
+          <div class="value">{{ tool.name }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Generated</div>
+          <div class="value" style="font-size: 14px; line-height: 1.3;">{{ generated_at }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Final attacks</div>
+          <div class="value {% if analysis.attacks_succeeded > 0 %}bad{% else %}good{% endif %}">{{ analysis.attacks_succeeded }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Policy rules</div>
+          <div class="value">{{ policy.enforcement_rules | length }}</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {% if hardening_showcase %}
+  <section class="panel">
+    <div class="panel-head">
       <div>
-        <h1>agent-hardener report</h1>
-        <div class="muted">Tool: <strong>{{ tool.name }}</strong></div>
-      </div>
-      <div class="meta">
-        <div>Generated: {{ generated_at }}</div>
-        <div>Pipeline version: 1.0</div>
+        <h2>Security Progression</h2>
+        <div class="muted">Each round shows the prompt set used, the policy produced, and how the attack success rate changed.</div>
       </div>
     </div>
 
-    <div class="stats">
-      <div class="stat">
-        <div class="label">Total Attacks</div>
-        <div class="value">{{ analysis.total_attacks_attempted }}</div>
+    {% for round in hardening_showcase %}
+    <article class="round-card" id="round-{{ round.round }}">
+      <div class="round-head">
+        <div class="round-title">
+          <div class="round-kicker {{ round.attack_intensity }}">Round {{ round.round }} · {{ round.attack_intensity_label }}</div>
+          <h3>{{ round.attack_intensity_label }} prompts</h3>
+          <div class="muted">Primary exploit vector: {{ round.primary_exploit_vector }}</div>
+        </div>
+
+        <div class="round-meta">
+          <div class="mini-stat">
+            <div class="label">Success rate</div>
+            <div class="value">{{ "%.0f"|format(round.success_rate * 100) }}%</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Succeeded</div>
+            <div class="value">{{ round.attack_successes }}/{{ round.attack_total }}</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Rules</div>
+            <div class="value">{{ round.enforcement_rules }}</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Tier</div>
+            <div class="value">{{ round.attack_intensity_label }}</div>
+          </div>
+        </div>
       </div>
-      <div class="stat">
-        <div class="label">Succeeded (Current Threshold)</div>
-        <div class="value {% if analysis.attacks_succeeded > 0 %}bad{% else %}good{% endif %}">{{ analysis.attacks_succeeded }}</div>
+
+      <div class="progress-track" aria-label="Attack success rate">
+        <div class="progress-fill" style="width: {{ (round.success_rate * 100) | round(0) }}%;"></div>
       </div>
-      <div class="stat">
-        <div class="label">Policy Rules</div>
-        <div class="value">{{ policy.enforcement_rules | length }}</div>
+
+      <div class="round-grid">
+        <div class="stack">
+          <h4>Prompts used in this round</h4>
+          {% for attack in round.attack_rows %}
+          <article class="prompt-card">
+            <div class="topline">
+              <div>
+                <div class="prompt-title">{{ attack.harm_category }}</div>
+                <div class="prompt-subtitle">Chain: {{ attack.attack_chain | join(" → ") }}</div>
+              </div>
+              {% set score_class = "good" if attack.final_score <= 0 else "warn" if attack.final_score <= 0.3 else "bad" %}
+              <div class="score-pill {{ score_class }}">score {{ "%.2f"|format(attack.final_score) }}</div>
+            </div>
+
+            <div class="muted" style="font-size: 12px; margin-bottom: 4px;">
+              Policy effect: {% if attack.policy_mitigated == "yes" %}mitigated{% elif attack.policy_mitigated == "no-explicit-rule" %}no explicit rule{% else %}not needed{% endif %}
+            </div>
+
+            <details>
+              <summary>{{ attack.final_prompt | truncate(170, True, "…") }}</summary>
+              <div class="code">{{ attack.final_prompt }}</div>
+            </details>
+
+            <div class="prompt-footer">
+              <div>
+                {% if attack.policy_rule_ids %}
+                  {% for rid in attack.policy_rule_ids %}
+                    <span class="badge neutral">{{ rid }}</span>
+                  {% endfor %}
+                {% else %}
+                  <span class="muted">No per-attack policy rule</span>
+                {% endif %}
+              </div>
+              <div class="muted">{{ attack.policy_actions | join(", ") }}</div>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+
+        <div class="stack">
+          <h4>Policy made for this round</h4>
+          <div class="policy-card">
+            <div class="policy-grid">
+              <div class="policy-row">
+                <div>
+                  <div class="label">Confidentiality</div>
+                  <div class="value">read {{ round.policy_summary.confidentiality.read }} / write {{ round.policy_summary.confidentiality.write }}</div>
+                </div>
+                <span class="badge neutral">policy</span>
+              </div>
+              <div class="policy-row">
+                <div>
+                  <div class="label">Session taint</div>
+                  <div class="value">{{ round.policy_summary.session_taint }}</div>
+                </div>
+                <span class="badge neutral">taint</span>
+              </div>
+              <div class="policy-row">
+                <div>
+                  <div class="label">Coverage</div>
+                  <div class="value">fully {{ round.policy_summary.coverage.attacks_fully_blocked_by_policy }}, partial {{ round.policy_summary.coverage.attacks_partially_mitigated }}, model-level {{ round.policy_summary.coverage.attacks_requiring_model_level_defense }}, unmitigated {{ round.policy_summary.coverage.unmitigated_attacks }}</div>
+                </div>
+                <span class="badge neutral">coverage</span>
+              </div>
+            </div>
+
+            <h4>Enforcement rules</h4>
+            {% if round.policy_summary.enforcement_rules %}
+              <div class="rule-list">
+                {% for rule in round.policy_summary.enforcement_rules %}
+                <div class="rule-item">
+                  <div class="rule-top">
+                    <span class="badge {% if rule.action == 'BLOCK' %}bad{% elif rule.action == 'REQUIRE_CONFIRMATION' %}warn{% else %}neutral{% endif %}">{{ rule.rule_id }}</span>
+                    <span class="badge neutral">{{ rule.action }}</span>
+                  </div>
+                  <div class="rule-body">{{ rule.trigger_condition }}</div>
+                  <div class="rule-body" style="margin-top: 6px;">Motivated by {{ rule.motivated_by_attack }}</div>
+                </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="muted">No round-specific enforcement rules were generated.</div>
+            {% endif %}
+          </div>
+        </div>
       </div>
-      <div class="stat">
-        <div class="label">Primary Exploit Vector</div>
-        <div class="value" style="font-size: 16px; margin-top: 8px;">{{ analysis.primary_exploit_vector.value }}</div>
+    </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Final Round Summary</h2>
+        <div class="muted">This snapshot shows the last round’s attacks, the final policy, and the exact prompt text that survived hardening.</div>
       </div>
     </div>
-  </div>
 
-  <div class="panel">
-    <h2>Attack Outcomes (Prompt -> Tool Result -> Policy Mitigation)</h2>
     <div class="table-wrap">
       <table>
         <thead>
@@ -185,22 +728,22 @@
             </td>
             <td>
               {% if row.worked_on_tool %}
-                <span class="badge b-good">yes</span>
+                <span class="badge good">yes</span>
               {% else %}
-                <span class="badge b-bad">no</span>
+                <span class="badge bad">no</span>
               {% endif %}
             </td>
             <td>
               {% if row.attack_success %}
-                <span class="badge b-bad">yes</span>
+                <span class="badge bad">yes</span>
               {% else %}
-                <span class="badge b-good">no</span>
+                <span class="badge good">no</span>
               {% endif %}
             </td>
             <td>
               {% if row.policy_rule_ids %}
                 {% for rid in row.policy_rule_ids %}
-                  <div><span class="badge b-neutral">{{ rid }}</span></div>
+                  <div><span class="badge neutral">{{ rid }}</span></div>
                 {% endfor %}
                 <div class="muted" style="margin-top:4px">actions: {{ row.policy_actions | join(", ") }}</div>
               {% else %}
@@ -209,12 +752,12 @@
             </td>
             <td>
               {% if row.policy_mitigated == "yes" %}
-                <span class="badge b-good">yes</span>
+                <span class="badge good">yes</span>
               {% elif row.policy_mitigated == "no-explicit-rule" %}
-                <span class="badge b-warn">unknown</span>
+                <span class="badge warn">unknown</span>
                 <div class="muted" style="margin-top:4px">no explicit per-attack rule</div>
               {% else %}
-                <span class="badge b-neutral">n/a</span>
+                <span class="badge neutral">n/a</span>
               {% endif %}
             </td>
           </tr>
@@ -222,52 +765,63 @@
         </tbody>
       </table>
     </div>
-  </div>
+  </section>
 
-  <div class="panel">
-    <h2>Policy Generated</h2>
-    <table>
-      <tbody>
-        <tr>
-          <th style="width: 280px;">Confidentiality (read/write)</th>
-          <td>
-            {{ policy.confidentiality_annotations.read_confidentiality }} / {{ policy.confidentiality_annotations.write_confidentiality }}
-          </td>
-        </tr>
-        <tr>
-          <th>Initial session taint</th>
-          <td>{{ policy.session_taint_rules.initial_session_taint }}</td>
-        </tr>
-        <tr>
-          <th>Coverage summary</th>
-          <td>
-            fully_blocked={{ policy.policy_coverage.attacks_fully_blocked_by_policy }},
-            partially_mitigated={{ policy.policy_coverage.attacks_partially_mitigated }},
-            model_level={{ policy.policy_coverage.attacks_requiring_model_level_defense }},
-            unmitigated={{ policy.policy_coverage.unmitigated_attacks }}
-          </td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Final Policy Snapshot</h2>
+        <div class="muted">The final policy reflects the accumulated hardening feedback from the earlier easy, medium, and hard rounds.</div>
+      </div>
+    </div>
 
-    <h2 style="margin-top:14px;">Enforcement Rules</h2>
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr>
+            <th style="width: 280px;">Confidentiality (read/write)</th>
+            <td>
+              {{ policy.confidentiality_annotations.read_confidentiality }} / {{ policy.confidentiality_annotations.write_confidentiality }}
+            </td>
+          </tr>
+          <tr>
+            <th>Initial session taint</th>
+            <td>{{ policy.session_taint_rules.initial_session_taint }}</td>
+          </tr>
+          <tr>
+            <th>Coverage summary</th>
+            <td>
+              fully_blocked={{ policy.policy_coverage.attacks_fully_blocked_by_policy }},
+              partially_mitigated={{ policy.policy_coverage.attacks_partially_mitigated }},
+              model_level={{ policy.policy_coverage.attacks_requiring_model_level_defense }},
+              unmitigated={{ policy.policy_coverage.unmitigated_attacks }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top: 16px;">Enforcement Rules</h3>
     {% if policy.enforcement_rules %}
-      <ul class="list">
+      <div class="rule-list">
         {% for rule in policy.enforcement_rules %}
-          <li>
-            <strong>{{ rule.rule_id }}</strong> ({{ rule.action }})
-            - motivated by {{ rule.motivated_by_attack }}
-            <div class="muted">{{ rule.trigger_condition }}</div>
-          </li>
+          <div class="rule-item">
+            <div class="rule-top">
+              <span class="badge neutral">{{ rule.rule_id }}</span>
+              <span class="badge {% if rule.action.value == 'BLOCK' %}bad{% elif rule.action.value == 'REQUIRE_CONFIRMATION' %}warn{% else %}neutral{% endif %}">{{ rule.action.value }}</span>
+            </div>
+            <div class="rule-body">{{ rule.trigger_condition }}</div>
+            <div class="rule-body" style="margin-top: 6px;">{{ rule.reason }}</div>
+          </div>
         {% endfor %}
-      </ul>
+      </div>
     {% else %}
       <div class="muted">No enforcement rules were generated.</div>
     {% endif %}
-  </div>
+  </section>
 
   <div class="foot">
-    Streamlined report: prompt, tool outcome, policy output, and mitigation status.
+    The progression cards above are the main showcase: easy prompts first, then medium, then hard, with each round’s policy shown alongside the prompts it hardened against.
   </div>
 </div>
 </body>

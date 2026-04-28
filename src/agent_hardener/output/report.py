@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
@@ -27,6 +28,7 @@ def generate_report(
     analysis: FailureAnalysisReport,
     policy: SAMOSPolicy,
     output_dir: Path,
+    hardening_history: list[dict[str, Any]] | None = None,
 ) -> tuple[Path, Path]:
     """Generate the JSON report and HTML dashboard.
 
@@ -52,6 +54,7 @@ def generate_report(
         ],
         "stage2_failure_analysis": json.loads(analysis.model_dump_json()),
         "stage3_policy": json.loads(policy.model_dump_json()),
+        "hardening_history": hardening_history or [],
     }
 
     # ── Write JSON output ─────────────────────────────────────────────────────
@@ -70,6 +73,7 @@ def generate_report(
     # Pre-compute chart data for injection into the template
     chart_data = _build_chart_data(attack_records, policy)
     attack_summaries = _build_attack_summaries(attack_records, policy)
+    hardening_showcase = _build_hardening_showcase(hardening_history or [])
 
     html_content = template.render(
         tool=tool,
@@ -77,6 +81,7 @@ def generate_report(
         attack_summaries=attack_summaries,
         analysis=analysis,
         policy=policy,
+        hardening_showcase=hardening_showcase,
         chart_data_json=json.dumps(chart_data),
         report_data_json=json.dumps(report_data),
         generated_at=report_data["generated_at"],
@@ -131,6 +136,46 @@ def _build_chart_data(
         "policy_coverage": coverage_data,
         "enforcement_action_counts": exploit_counts,
     }
+
+
+def _build_hardening_showcase(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize hardening rounds for the HTML timeline."""
+
+    showcase: list[dict[str, Any]] = []
+    for entry in history:
+        attack_rows = [dict(row) for row in entry.get("attack_rows", [])]
+        policy_summary = dict(entry.get("policy_summary", {}))
+        coverage = dict(policy_summary.get("coverage", entry.get("policy_coverage", {})))
+
+        showcase.append(
+            {
+                "round": entry.get("round", 0),
+                "attack_intensity": entry.get("attack_intensity", ""),
+                "attack_intensity_label": _display_attack_intensity(entry.get("attack_intensity", "")),
+                "attack_successes": entry.get("attack_successes", 0),
+                "attack_total": entry.get("attack_total", 0),
+                "success_rate": float(entry.get("success_rate", 0.0)),
+                "primary_exploit_vector": entry.get("primary_exploit_vector", ""),
+                "policy_coverage": coverage,
+                "enforcement_rules": entry.get("enforcement_rules", 0),
+                "learned_attack_signatures": entry.get("learned_attack_signatures", []),
+                "attack_rows": attack_rows,
+                "policy_summary": {
+                    "confidentiality": policy_summary.get("confidentiality", {}),
+                    "session_taint": policy_summary.get("session_taint", ""),
+                    "coverage": coverage,
+                    "enforcement_rules": policy_summary.get("enforcement_rules", []),
+                },
+            }
+        )
+
+    return showcase
+
+
+def _display_attack_intensity(raw: str) -> str:
+    if raw == "strong":
+        return "Hard"
+    return raw.capitalize() if raw else "Round"
 
 
 def _build_attack_summaries(
