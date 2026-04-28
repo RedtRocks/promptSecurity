@@ -7,6 +7,8 @@ Includes model-specific optimizations for Qwen, Gemma, and other open-source mod
 from __future__ import annotations
 
 import os
+import subprocess
+import shutil
 from typing import Any, Optional
 
 import litellm
@@ -35,6 +37,7 @@ class LLMProvider:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._configure_env(settings)
+        self._resolved_ollama_base_url = self._resolve_ollama_base_url()
         # Build a Router for automatic retry/fallback
         self._router = self._build_router(settings)
         
@@ -59,8 +62,11 @@ class LLMProvider:
         _set_if_nonempty("AZURE_API_KEY", s.azure_api_key)
         _set_if_nonempty("AZURE_API_BASE", s.azure_api_base)
         _set_if_nonempty("AZURE_API_VERSION", s.azure_api_version)
-        if s.ollama_base_url and _uses_ollama_model(s):
-            litellm.api_base = s.ollama_base_url.rstrip("/")
+        if _uses_ollama_model(s):
+            # Keep LiteLLM pointed at the currently configured Ollama endpoint.
+            # Direct Ollama calls below may still switch to localhost when a GPU server
+            # exposes a local Ollama daemon.
+            litellm.api_base = s.ollama_base_url.rstrip("/") if s.ollama_base_url else None
         else:
             # Prevent stale global api_base from affecting non-Ollama providers.
             litellm.api_base = None
@@ -173,7 +179,7 @@ class LLMProvider:
         response_format: Optional[dict[str, Any]] = None,
     ) -> str:
         """Call the Ollama HTTP API directly so we can control think/format behavior."""
-        base_url = self._settings.ollama_base_url.rstrip("/")
+        base_url = self._resolved_ollama_base_url
         model = model_name.split("/", 1)[1] if "/" in model_name else model_name
 
         if _uses_ollama_generate(model):
