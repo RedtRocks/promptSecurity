@@ -78,9 +78,26 @@ def analyze(
     max_iterations: Optional[int] = typer.Option(
         None,
         "--max-iterations",
+        min=0,
+        max=10,
+        help="Maximum refinement iterations per attack (overrides config). 0 = no refinement (P0-only baseline).",
+    ),
+    no_refine: bool = typer.Option(
+        False,
+        "--no-refine",
+        help="Baseline: skip Stage 1.3 refinement. Equivalent to --max-iterations 0.",
+    ),
+    baseline_attacks: Optional[str] = typer.Option(
+        None,
+        "--baseline-attacks",
+        help="Stage 1 attack source: 'llm' (default) or 'template' (skip LLM, use fallback templates).",
+    ),
+    n_repeats: Optional[int] = typer.Option(
+        None,
+        "--n-repeats",
         min=1,
         max=10,
-        help="Maximum refinement iterations per attack (overrides config file).",
+        help="Number of independent repeats per attack cycle (>1 enables seed-sweep / variance reporting).",
     ),
     attack_parallelism: Optional[int] = typer.Option(
         None,
@@ -146,6 +163,14 @@ def analyze(
             settings = settings.model_copy(update={"default_model": provider})
         if max_iterations is not None:
             settings = settings.model_copy(update={"max_iterations": max_iterations})
+        if no_refine:
+            settings = settings.model_copy(update={"max_iterations": 0})
+        if baseline_attacks is not None:
+            if baseline_attacks not in {"llm", "template"}:
+                raise ValueError(f"--baseline-attacks must be 'llm' or 'template', got {baseline_attacks!r}")
+            settings = settings.model_copy(update={"baseline_attacks": baseline_attacks})
+        if n_repeats is not None:
+            settings = settings.model_copy(update={"n_repeats": n_repeats})
         if attack_parallelism is not None:
             settings = settings.model_copy(update={"attack_parallelism": attack_parallelism})
         if agent_endpoint:
@@ -198,8 +223,17 @@ def analyze(
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Generating adversarial prompts...", total=None)
-        adversarial_prompts = generate_attacks(tool, profile, llm)
-        prog.update(t, description=f"[green]{len(adversarial_prompts)} adversarial prompts generated[/]")
+        adversarial_prompts = generate_attacks(
+            tool, profile, llm,
+            baseline_mode=settings.baseline_attacks,
+        )
+        prog.update(
+            t,
+            description=(
+                f"[green]{len(adversarial_prompts)} adversarial prompts generated[/] "
+                f"(attacker={settings.baseline_attacks})"
+            ),
+        )
         prog.stop_task(t)
 
     if stage1_only:
@@ -243,6 +277,9 @@ def analyze(
 
     def _run_single_attack(index_and_prompt):
         i, adv_prompt = index_and_prompt
+        seeds_list = (
+            list(range(1, settings.n_repeats + 1)) if settings.n_repeats > 1 else None
+        )
         return run_attack_cycle(
             adversarial_prompt=adv_prompt,
             agent=agent,
@@ -250,6 +287,7 @@ def analyze(
             max_iterations=settings.max_iterations,
             success_threshold=settings.attack_success_threshold,
             record_index=i + 1,
+            seeds=seeds_list,
         )
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
@@ -398,6 +436,17 @@ def analyze(
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
 
+    from agent_hardener.shared.manifest import write_run_manifest
+    manifest_path = write_run_manifest(
+        output_dir=output_dir,
+        settings=settings,
+        tool_name=tool.name,
+        command="analyze",
+        attack_records=attack_records,
+        adversarial_prompts=adversarial_prompts,
+        elapsed_s=time.time() - pipeline_start,
+    )
+
     agent.close()
     elapsed = time.time() - pipeline_start
 
@@ -405,7 +454,8 @@ def analyze(
     console.print(Panel(
         f"[bold green]Pipeline complete[/] in [cyan]{elapsed:.1f}s[/]\n\n"
         f"  [bold]JSON report:[/]  {json_path}\n"
-        f"  [bold]HTML report:[/]  {html_path}",
+        f"  [bold]HTML report:[/]  {html_path}\n"
+        f"  [bold]Run manifest:[/]  {manifest_path}",
         title="[bold]Output",
         border_style="green",
         padding=(0, 2),
@@ -444,9 +494,34 @@ def harden(
     max_iterations: Optional[int] = typer.Option(
         None,
         "--max-iterations",
+        min=0,
+        max=10,
+        help="Maximum refinement iterations per attack (overrides config). 0 = no refinement.",
+    ),
+    no_refine: bool = typer.Option(
+        False,
+        "--no-refine",
+        help="Baseline: skip Stage 1.3 refinement. Equivalent to --max-iterations 0.",
+    ),
+    baseline_attacks: Optional[str] = typer.Option(
+        None,
+        "--baseline-attacks",
+        help="Stage 1 attack source: 'llm' (default) or 'template' (skip LLM, use fallback templates).",
+    ),
+    n_repeats: Optional[int] = typer.Option(
+        None,
+        "--n-repeats",
         min=1,
         max=10,
-        help="Maximum refinement iterations per attack (overrides config file).",
+        help="Number of independent repeats per attack cycle (>1 enables seed sweeps / variance reporting).",
+    ),
+    enforce_prior_policy: bool = typer.Option(
+        False,
+        "--enforce-prior-policy/--no-enforce-prior-policy",
+        help=(
+            "Wrap the agent with the policy from the prior hardening round (round N>=2). "
+            "Provides a deterministic end-to-end measurement of policy efficacy."
+        ),
     ),
     attack_parallelism: Optional[int] = typer.Option(
         None,
@@ -468,6 +543,15 @@ def harden(
         min=0.0,
         max=1.0,
         help="Stop hardening once the successful attack rate is at or below this value.",
+    ),
+    enable_signature_memory: bool = typer.Option(
+        False,
+        "--enable-signature-memory/--no-signature-memory",
+        help=(
+            "Short-circuit attacks whose (harm_category, intensity, attack_chain) "
+            "signature already succeeded in a prior round. Inflates apparent defense "
+            "and is NOT a measurement of the SAMOS policy. Off by default."
+        ),
     ),
     agent_endpoint: Optional[str] = typer.Option(
         None,
@@ -509,12 +593,24 @@ def harden(
             settings = settings.model_copy(update={"default_model": provider})
         if max_iterations is not None:
             settings = settings.model_copy(update={"max_iterations": max_iterations})
+        if no_refine:
+            settings = settings.model_copy(update={"max_iterations": 0})
+        if baseline_attacks is not None:
+            if baseline_attacks not in {"llm", "template"}:
+                raise ValueError(f"--baseline-attacks must be 'llm' or 'template', got {baseline_attacks!r}")
+            settings = settings.model_copy(update={"baseline_attacks": baseline_attacks})
+        if n_repeats is not None:
+            settings = settings.model_copy(update={"n_repeats": n_repeats})
+        if enforce_prior_policy:
+            settings = settings.model_copy(update={"enforce_prior_policy": True})
         if attack_parallelism is not None:
             settings = settings.model_copy(update={"attack_parallelism": attack_parallelism})
         if hardening_rounds is not None:
             settings = settings.model_copy(update={"hardening_rounds": hardening_rounds})
         if hardening_target_success_rate is not None:
             settings = settings.model_copy(update={"hardening_target_success_rate": hardening_target_success_rate})
+        if enable_signature_memory:
+            settings = settings.model_copy(update={"enable_signature_memory": True})
         if agent_endpoint:
             settings = settings.model_copy(update={"agent_endpoint": agent_endpoint})
     except Exception as exc:

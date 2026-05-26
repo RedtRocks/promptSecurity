@@ -178,16 +178,13 @@ def build_policy(
         successful_records=successful_records,
     )
 
-    # Policy coverage accounting
-    coverage = _compute_coverage(
-        successful_records=successful_records,
-        all_records=records,
-        confidentiality=confidentiality,
-        capabilities=capabilities,
-        enforcement_rules=enforcement_rules,
-    )
-
-    return SAMOSPolicy(
+    # Construct the policy with a placeholder coverage, then run the
+    # deterministic verifier against the freshly-built policy and overwrite
+    # policy_coverage with the verifier's reproducible numbers. Doing it this
+    # way means the verifier sees the *real* enforcement rules, taint rules,
+    # and capability annotations — not an LLM's prediction of what they'd do.
+    placeholder_coverage = PolicyCoverage()
+    policy = SAMOSPolicy(
         tool_name=tool_name,
         policy_version="1.0",
         generated_from_attack_cycles=len(records),
@@ -197,8 +194,17 @@ def build_policy(
         enforcement_rules=enforcement_rules,
         gateway_enforcement=gateway_enforcement,
         deployment_spec=deployment,
-        policy_coverage=coverage,
+        policy_coverage=placeholder_coverage,
     )
+
+    from agent_hardener.verifier import compute_deterministic_coverage
+    deterministic_coverage, _verdicts = compute_deterministic_coverage(
+        records=records,
+        policy=policy,
+        success_threshold=success_threshold,
+    )
+    policy.policy_coverage = deterministic_coverage
+    return policy
 
 
 def _build_taint_rules(

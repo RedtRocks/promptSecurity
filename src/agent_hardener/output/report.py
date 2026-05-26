@@ -8,6 +8,7 @@ Produces two output files in the specified directory:
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,50 +31,39 @@ def generate_report(
     output_dir: Path,
     hardening_history: list[dict[str, Any]] | None = None,
 ) -> tuple[Path, Path]:
-    """Generate the JSON report and HTML dashboard.
-
-    Args:
-        tool: The original MCPToolDefinition.
-        attack_records: All Stage 1 AttackRecord objects.
-        analysis: Stage 2 FailureAnalysisReport.
-        policy: Stage 3 SAMOSPolicy.
-        output_dir: Directory in which to write output files.
-
-    Returns:
-        Tuple of (json_path, html_path).
-    """
+    """Generate the JSON report and HTML dashboard."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Assemble the complete report dict ─────────────────────────────────────
+    # Deterministic verifier output — auditable per-record verdicts.
+    from agent_hardener.verifier import verify_all_records
+    verifier_verdicts = verify_all_records(attack_records, policy)
+    verdicts_by_id = {v.record_id: v for v in verifier_verdicts}
+
     report_data = {
         "pipeline_version": "1.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tool": json.loads(tool.model_dump_json()),
-        "stage1_attack_records": [
-            json.loads(r.model_dump_json()) for r in attack_records
-        ],
+        "stage1_attack_records": [json.loads(r.model_dump_json()) for r in attack_records],
         "stage2_failure_analysis": json.loads(analysis.model_dump_json()),
         "stage3_policy": json.loads(policy.model_dump_json()),
+        "policy_verifier_verdicts": [v.to_dict() for v in verifier_verdicts],
         "hardening_history": hardening_history or [],
     }
 
-    # ── Write JSON output ─────────────────────────────────────────────────────
     json_path = output_dir / "report.json"
     json_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
 
-    # ── Render HTML dashboard ─────────────────────────────────────────────────
     html_path = output_dir / "report.html"
-
     env = Environment(
         loader=PackageLoader("agent_hardener", "output/templates"),
         autoescape=select_autoescape(["html"]),
     )
     template = env.get_template("report.html.j2")
 
-    # Pre-compute chart data for injection into the template
-    chart_data = _build_chart_data(attack_records, policy)
-    attack_summaries = _build_attack_summaries(attack_records, policy)
+    chart_data = _build_chart_data(attack_records, policy, verifier_verdicts)
+    attack_summaries = _build_attack_summaries(attack_records, policy, verdicts_by_id)
     hardening_showcase = _build_hardening_showcase(hardening_history or [])
+    headline = _build_headline_metrics(attack_records, policy, verifier_verdicts)
 
     html_content = template.render(
         tool=tool,
@@ -81,7 +71,9 @@ def generate_report(
         attack_summaries=attack_summaries,
         analysis=analysis,
         policy=policy,
+        verifier_verdicts=[v.to_dict() for v in verifier_verdicts],
         hardening_showcase=hardening_showcase,
+        headline=headline,
         chart_data_json=json.dumps(chart_data),
         report_data_json=json.dumps(report_data),
         generated_at=report_data["generated_at"],
@@ -91,30 +83,93 @@ def generate_report(
     return json_path, html_path
 
 
+def _build_headline_metrics(
+    records: list[AttackRecord],
+    policy: SAMOSPolicy,
+    verdicts,
+) -> dict[str, Any]:
+    """Top-of-page summary tiles."""
+    n = len(records)
+    n_success = sum(1 for r in records if r.attempt_number_of_success is not None)
+    n_refusals = sum(1 for r in records if r.refusal_occurred)
+    cov = policy.policy_coverage
+    n_succ_attacks = max(1, n_success)
+    coverage_pct = cov.attacks_fully_blocked_by_policy / n_succ_attacks if n_success else 0.0
+
+    # Seed sweep variance: only meaningful when at least one record has >1 score.
+    seed_stddevs = []
+    for r in records:
+        if r.seed_scores and len(r.seed_scores) > 1:
+            mean = sum(r.seed_scores) / len(r.seed_scores)
+            var = sum((s - mean) ** 2 for s in r.seed_scores) / (len(r.seed_scores) - 1)
+            seed_stddevs.append(math.sqrt(var))
+    mean_seed_stddev = sum(seed_stddevs) / len(seed_stddevs) if seed_stddevs else None
+
+    iters_to_success = [
+        r.attempt_number_of_success
+        for r in records
+        if r.attempt_number_of_success is not None
+    ]
+    mean_iters = sum(iters_to_success) / len(iters_to_success) if iters_to_success else None
+
+    return {
+        "total_attacks": n,
+        "successful_attacks": n_success,
+        "success_rate": (n_success / n) if n else 0.0,
+        "refusals": n_refusals,
+        "refusal_rate": (n_refusals / n) if n else 0.0,
+        "fully_blocked_by_policy": cov.attacks_fully_blocked_by_policy,
+        "partially_mitigated": cov.attacks_partially_mitigated,
+        "model_level": cov.attacks_requiring_model_level_defense,
+        "unmitigated": cov.unmitigated_attacks,
+        "policy_coverage_pct": coverage_pct,
+        "enforcement_rules": len(policy.enforcement_rules),
+        "taint_propagation_rules": len(policy.session_taint_rules.taint_propagation_rules),
+        "mean_seed_stddev": mean_seed_stddev,
+        "mean_iters_to_success": mean_iters,
+    }
+
+
 def _build_chart_data(
     records: list[AttackRecord],
     policy: SAMOSPolicy,
+    verdicts,
 ) -> dict:
     """Pre-compute data structures for Chart.js charts."""
 
-    # Chart 1: Attack score per harm category (bar chart)
-    category_scores = {
-        r.harm_category.value: r.final_score for r in records
-    }
-
-    # Chart 2: Score progression per iteration for each attack (line chart)
-    iteration_data: list[dict] = []
-    for record in records:
-        points = [
-            {"attempt": it.attempt_number, "score": it.score}
-            for it in record.attack_trajectory
-        ]
-        iteration_data.append({
-            "label": f"{record.harm_category.value} ({record.record_id})",
-            "data": points,
+    # Per-record summary: ID, harm, score, mean+/-std if seeds present, status.
+    per_record = []
+    for r in records:
+        seed_mean = None
+        seed_std = None
+        if r.seed_scores and len(r.seed_scores) > 1:
+            seed_mean = sum(r.seed_scores) / len(r.seed_scores)
+            var = sum((s - seed_mean) ** 2 for s in r.seed_scores) / (len(r.seed_scores) - 1)
+            seed_std = math.sqrt(var)
+        per_record.append({
+            "record_id": r.record_id,
+            "harm": r.harm_category.value,
+            "score": r.final_score,
+            "seed_scores": list(r.seed_scores),
+            "seed_mean": seed_mean,
+            "seed_std": seed_std,
+            "iterations": len(r.attack_trajectory),
+            "intensity": r.attack_intensity.value,
+            "success": r.attempt_number_of_success is not None,
+            "refusal": r.refusal_occurred,
         })
 
-    # Chart 3: Policy coverage donut chart
+    iteration_data = []
+    for r in records:
+        iteration_data.append({
+            "label": r.harm_category.value,
+            "record_id": r.record_id,
+            "data": [
+                {"attempt": it.attempt_number, "score": it.score}
+                for it in r.attack_trajectory
+            ],
+        })
+
     cov = policy.policy_coverage
     coverage_data = {
         "fully_blocked": cov.attacks_fully_blocked_by_policy,
@@ -123,52 +178,52 @@ def _build_chart_data(
         "unmitigated": cov.unmitigated_attacks,
     }
 
-    # Chart 4: Exploit type distribution (pie chart)
-    exploit_counts: dict[str, int] = {}
-    for finding in policy.enforcement_rules:
-        # Count by action type as a proxy for severity
-        action = finding.action.value
-        exploit_counts[action] = exploit_counts.get(action, 0) + 1
+    verdict_counts = {"BLOCKED": 0, "AUDITED": 0, "REQUIRES_CONFIRMATION": 0, "UNMITIGATED": 0}
+    for v in verdicts:
+        verdict_counts[v.final_status.value] = verdict_counts.get(v.final_status.value, 0) + 1
+
+    enforcement_actions = {}
+    for rule in policy.enforcement_rules:
+        a = rule.action.value
+        enforcement_actions[a] = enforcement_actions.get(a, 0) + 1
 
     return {
-        "category_scores": category_scores,
+        "per_record": per_record,
         "iteration_progressions": iteration_data,
         "policy_coverage": coverage_data,
-        "enforcement_action_counts": exploit_counts,
+        "verdict_counts": verdict_counts,
+        "enforcement_action_counts": enforcement_actions,
     }
 
 
 def _build_hardening_showcase(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Normalize hardening rounds for the HTML timeline."""
-
     showcase: list[dict[str, Any]] = []
     for entry in history:
         attack_rows = [dict(row) for row in entry.get("attack_rows", [])]
         policy_summary = dict(entry.get("policy_summary", {}))
         coverage = dict(policy_summary.get("coverage", entry.get("policy_coverage", {})))
 
-        showcase.append(
-            {
-                "round": entry.get("round", 0),
-                "attack_intensity": entry.get("attack_intensity", ""),
-                "attack_intensity_label": _display_attack_intensity(entry.get("attack_intensity", "")),
-                "attack_successes": entry.get("attack_successes", 0),
-                "attack_total": entry.get("attack_total", 0),
-                "success_rate": float(entry.get("success_rate", 0.0)),
-                "primary_exploit_vector": entry.get("primary_exploit_vector", ""),
-                "policy_coverage": coverage,
-                "enforcement_rules": entry.get("enforcement_rules", 0),
-                "learned_attack_signatures": entry.get("learned_attack_signatures", []),
-                "attack_rows": attack_rows,
-                "policy_summary": {
-                    "confidentiality": policy_summary.get("confidentiality", {}),
-                    "session_taint": policy_summary.get("session_taint", ""),
-                    "coverage": coverage,
-                    "enforcement_rules": policy_summary.get("enforcement_rules", []),
-                },
-            }
-        )
-
+        showcase.append({
+            "round": entry.get("round", 0),
+            "attack_intensity": entry.get("attack_intensity", ""),
+            "attack_intensity_label": _display_attack_intensity(entry.get("attack_intensity", "")),
+            "attack_successes": entry.get("attack_successes", 0),
+            "attack_total": entry.get("attack_total", 0),
+            "success_rate": float(entry.get("success_rate", 0.0)),
+            "agent_run_success_rate": float(entry.get("agent_run_success_rate", entry.get("success_rate", 0.0))),
+            "primary_exploit_vector": entry.get("primary_exploit_vector", ""),
+            "policy_coverage": coverage,
+            "enforcement_rules": entry.get("enforcement_rules", 0),
+            "learned_attack_signatures": entry.get("learned_attack_signatures", []),
+            "attack_rows": attack_rows,
+            "policy_summary": {
+                "confidentiality": policy_summary.get("confidentiality", {}),
+                "session_taint": policy_summary.get("session_taint", ""),
+                "coverage": coverage,
+                "enforcement_rules": policy_summary.get("enforcement_rules", []),
+            },
+        })
     return showcase
 
 
@@ -181,46 +236,69 @@ def _display_attack_intensity(raw: str) -> str:
 def _build_attack_summaries(
     records: list[AttackRecord],
     policy: SAMOSPolicy,
+    verdicts_by_id: dict,
 ) -> list[dict[str, object]]:
-    """Build concise per-attack rows for the streamlined HTML report."""
-
+    """Per-attack rows enriched with verifier verdicts and seed-sweep variance."""
     summaries: list[dict[str, object]] = []
     for record in records:
         matched_rules = [
-            rule
-            for rule in policy.enforcement_rules
+            rule for rule in policy.enforcement_rules
             if rule.motivated_by_attack == record.record_id
         ]
-
         touched_tool = bool(record.successful_tool_calls or record.failed_tool_calls)
         if not touched_tool:
             touched_tool = any(it.trajectory.tool_calls for it in record.attack_trajectory)
 
         attack_success = record.attempt_number_of_success is not None
-        if attack_success and matched_rules:
-            mitigation_status = "yes"
+        verdict = verdicts_by_id.get(record.record_id)
+        verdict_status = verdict.final_status.value if verdict else "UNMITIGATED"
+
+        if attack_success and verdict_status == "BLOCKED":
+            mitigation_status = "blocked-by-policy"
+        elif attack_success and verdict_status in ("AUDITED", "REQUIRES_CONFIRMATION"):
+            mitigation_status = "partially-mitigated"
+        elif attack_success and matched_rules:
+            mitigation_status = "rule-attached"
         elif attack_success:
-            mitigation_status = "no-explicit-rule"
+            mitigation_status = "unmitigated"
         else:
-            mitigation_status = "not-needed"
+            mitigation_status = "attack-failed"
 
-        first_prompt = record.attack_trajectory[0].prompt_used if record.attack_trajectory else record.final_prompt_used
-
-        summaries.append(
-            {
-                "record_id": record.record_id,
-                "harm_category": record.harm_category.value,
-                "attack_intensity": record.attack_intensity.value,
-                "final_score": record.final_score,
-                "attack_success": attack_success,
-                "worked_on_tool": touched_tool,
-                "failure_type": record.failure_type.value,
-                "first_prompt": first_prompt,
-                "final_prompt": record.final_prompt_used,
-                "policy_rule_ids": [rule.rule_id for rule in matched_rules],
-                "policy_actions": [rule.action.value for rule in matched_rules],
-                "policy_mitigated": mitigation_status,
-            }
+        first_prompt = (
+            record.attack_trajectory[0].prompt_used
+            if record.attack_trajectory else record.final_prompt_used
         )
+
+        seed_mean = None
+        seed_std = None
+        if record.seed_scores and len(record.seed_scores) > 1:
+            seed_mean = sum(record.seed_scores) / len(record.seed_scores)
+            var = sum((s - seed_mean) ** 2 for s in record.seed_scores) / (len(record.seed_scores) - 1)
+            seed_std = math.sqrt(var)
+
+        summaries.append({
+            "record_id": record.record_id,
+            "harm_category": record.harm_category.value,
+            "attack_intensity": record.attack_intensity.value,
+            "final_score": record.final_score,
+            "attack_success": attack_success,
+            "worked_on_tool": touched_tool,
+            "failure_type": record.failure_type.value,
+            "first_prompt": first_prompt,
+            "final_prompt": record.final_prompt_used,
+            "iterations": len(record.attack_trajectory),
+            "refusal_occurred": record.refusal_occurred,
+            "attempt_of_success": record.attempt_number_of_success,
+            "seed_scores": list(record.seed_scores),
+            "seed_mean": seed_mean,
+            "seed_std": seed_std,
+            "policy_rule_ids": [rule.rule_id for rule in matched_rules],
+            "policy_actions": [rule.action.value for rule in matched_rules],
+            "policy_mitigated": mitigation_status,
+            "verdict_status": verdict_status,
+            "verdict_notes": verdict.notes if verdict else [],
+            "verdict_triggered_rules": verdict.triggered_rule_ids if verdict else [],
+            "verdict_capability_denials": verdict.triggered_capability_denials if verdict else [],
+        })
 
     return summaries

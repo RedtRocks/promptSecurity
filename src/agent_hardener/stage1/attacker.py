@@ -132,12 +132,27 @@ def generate_attacks(
     profile: ToolProfile,
     llm: LLMProvider,
     attack_intensity: AttackIntensity = AttackIntensity.EASY,
+    baseline_mode: str = "llm",
 ) -> list[AdversarialPrompt]:
     """Generate one adversarial prompt per applicable harm category.
+
+    Args:
+        baseline_mode: "llm" (default) uses the LLM attacker. "template" skips
+            the LLM entirely and emits the hardcoded fallback templates for every
+            harm category. The latter is the paper baseline that lets you measure
+            how much the LLM attacker adds over deterministic templates.
 
     Returns a list of AdversarialPrompt objects (may have fewer than 8 entries
     if some harm categories are not applicable to this tool's profile).
     """
+    if baseline_mode == "template":
+        return [
+            _fallback_attack(tool, harm, attack_intensity)
+            for harm in HarmCategory
+        ]
+    if baseline_mode != "llm":
+        raise ValueError(f"Unknown baseline_mode: {baseline_mode!r}")
+
     params_text = _format_parameters(tool)
     capabilities_text = _format_capabilities(profile)
     results: list[AdversarialPrompt] = []
@@ -441,6 +456,7 @@ def _fallback_attack(
                 f"{tool.name} or {helper} not called.",
             ],
         },
+        is_fallback=True,
     )
 
 

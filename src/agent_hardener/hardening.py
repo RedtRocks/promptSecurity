@@ -203,27 +203,46 @@ def run_hardening_pipeline(
     final_round: dict[str, Any] | None = None
     learned_defense = LearnedDefenseMemory()
     min_ladder_rounds = min(settings.hardening_rounds, len(AttackIntensity))
+    prior_policy: SAMOSPolicy | None = None
 
     for round_index in range(1, settings.hardening_rounds + 1):
+        # Optionally wrap the agent with the prior round's policy so that round
+        # N >= 2 actually measures "does the policy block the new attacks?".
+        # Round 1 is always unguarded (we have no policy yet).
+        if settings.enforce_prior_policy and prior_policy is not None:
+            from agent_hardener.verifier import PolicyEnforcingAgentClient
+            effective_agent = PolicyEnforcingAgentClient(inner=agent, policy=prior_policy)
+            console.print(
+                f"\n  [dim]Round {round_index}: agent wrapped with policy from round {round_index - 1}.[/]"
+            )
+        else:
+            effective_agent = agent
+
         round_result = _run_round(
             tool=current_tool,
             learned_defense=learned_defense,
             llm=llm,
-            agent=agent,
+            agent=effective_agent,
             max_iterations=settings.max_iterations,
             attack_parallelism=settings.attack_parallelism,
             success_threshold=settings.attack_success_threshold,
             round_index=round_index,
             total_rounds=settings.hardening_rounds,
+            enable_signature_memory=settings.enable_signature_memory,
+            baseline_attacks=settings.baseline_attacks,
+            n_repeats=settings.n_repeats,
             console=console,
             err_console=err_console,
         )
         hardening_history.append(_build_round_history_entry(round_result))
         final_round = round_result
+        prior_policy = round_result["policy"]
 
         learned_defense.learn_from_round(round_result)
 
-        success_rate = round_result["success_rate"]
+        # Honest stopping criterion: use the agent-run success rate so that
+        # signature memory short-circuits don't end the loop prematurely.
+        success_rate = round_result["agent_run_success_rate"]
         if (
             success_rate <= settings.hardening_target_success_rate
             and round_index >= min_ladder_rounds
@@ -265,6 +284,24 @@ def run_hardening_pipeline(
     history_path = output_dir / "hardening_history.json"
     history_path.write_text(json.dumps(hardening_history, indent=2), encoding="utf-8")
 
+    from agent_hardener.shared.manifest import write_run_manifest
+    rounds_completed = len(hardening_history)
+    final_agent_run_rate = final_round.get("agent_run_success_rate", final_round["success_rate"])
+    write_run_manifest(
+        output_dir=output_dir,
+        settings=settings,
+        tool_name=tool.name,
+        command="harden",
+        attack_records=final_round["attack_records"],
+        adversarial_prompts=final_round["adversarial_prompts"],
+        elapsed_s=time.time() - pipeline_start,
+        extra={
+            "rounds_completed": rounds_completed,
+            "final_agent_run_success_rate": final_agent_run_rate,
+            "final_legacy_success_rate": final_round["success_rate"],
+        },
+    )
+
     console.rule("[bold cyan]Generating Final Reports[/]")
     with Progress(TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Writing JSON + HTML reports...", total=None)
@@ -301,8 +338,11 @@ def _run_round(
     success_threshold: float,
     round_index: int,
     total_rounds: int,
-    console: Console,
-    err_console: Console,
+    enable_signature_memory: bool,
+    baseline_attacks: str = "llm",
+    n_repeats: int = 1,
+    console: Console = None,
+    err_console: Console = None,
 ) -> dict[str, Any]:
     console.rule(f"[bold cyan]HARDENING ROUND {round_index}[/]")
 
@@ -320,8 +360,18 @@ def _run_round(
 
     with Progress(TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Generating adversarial prompts...", total=None)
-        adversarial_prompts = generate_attacks(working_tool, profile, llm, attack_intensity=attack_intensity)
-        prog.update(t, description=f"[green]{len(adversarial_prompts)} adversarial prompts generated[/] · tier {attack_intensity.value}")
+        adversarial_prompts = generate_attacks(
+            working_tool, profile, llm,
+            attack_intensity=attack_intensity,
+            baseline_mode=baseline_attacks,
+        )
+        prog.update(
+            t,
+            description=(
+                f"[green]{len(adversarial_prompts)} adversarial prompts generated[/] "
+                f"· tier {attack_intensity.value} · attacker={baseline_attacks}"
+            ),
+        )
         prog.stop_task(t)
 
     attack_records: list[AttackRecord] = []
@@ -341,7 +391,7 @@ def _run_round(
             harm_category=adv_prompt.harm_category.value,
             attack_chain=adv_prompt.attack_chain,
             attack_intensity=adv_prompt.attack_intensity,
-            enable_learned_blocks=round_index > 1,
+            enable_learned_blocks=enable_signature_memory and round_index > 1,
         )
         if blocked:
             return _build_blocked_attack_record(
@@ -350,6 +400,9 @@ def _run_round(
                 reason=reason,
                 record_index=i + 1,
             )
+        seeds_list = (
+            list(range(1, n_repeats + 1)) if n_repeats > 1 else None
+        )
         return run_attack_cycle(
             adversarial_prompt=adv_prompt,
             agent=agent,
@@ -357,6 +410,7 @@ def _run_round(
             max_iterations=max_iterations,
             success_threshold=success_threshold,
             record_index=i + 1,
+            seeds=seeds_list,
         )
 
     with Progress(TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
@@ -472,13 +526,57 @@ def _run_round(
     console.print(f"    Needs model-level def.:  [cyan]{cov.attacks_requiring_model_level_defense}[/]")
     console.print(f"    Unmitigated:             [{'red' if cov.unmitigated_attacks > 0 else 'green'}]{cov.unmitigated_attacks}[/]")
 
+    # Separate "blocked by signature memory" from "agent actually refused/failed"
+    # so the SAMOS policy + edit recommendations have a measurable contribution
+    # independent of the memoized blocklist.
+    signature_blocked_records = [
+        r for r in attack_records
+        if r.failure_type == FailureType.SAFETY_REFUSAL
+        and r.refusal_attempt_number == 0
+        and any(it.failure_diagnosis.startswith("learned policy blocked") for it in r.attack_trajectory)
+    ]
+    n_signature_blocked = len(signature_blocked_records)
+    agent_run_records = [r for r in attack_records if r not in signature_blocked_records]
+    n_agent_run = len(agent_run_records)
+    n_agent_run_succeeded = sum(1 for r in agent_run_records if r.final_score > success_threshold)
+    agent_run_success_rate = n_agent_run_succeeded / max(1, n_agent_run)
+
+    # Pipeline-health metrics (paper-grade reporting requires these).
+    n_fallback = sum(1 for p in adversarial_prompts if p.is_fallback)
+    n_refused = sum(1 for r in attack_records if r.refusal_occurred)
+    total_iterations = sum(len(r.attack_trajectory) for r in attack_records)
+    successes_with_iters = [
+        r.attempt_number_of_success
+        for r in attack_records
+        if r.attempt_number_of_success is not None
+    ]
+    mean_iters_to_success = (
+        sum(successes_with_iters) / len(successes_with_iters)
+        if successes_with_iters else None
+    )
+
+    # Legacy success_rate counts signature-blocked records as defended; report
+    # both so the inflation from signature memory is visible.
     success_rate = n_succeeded / max(1, len(attack_records))
     summary = {
         "round": round_index,
         "attack_intensity": attack_intensity.value,
         "attack_successes": n_succeeded,
         "attack_total": len(attack_records),
-        "success_rate": success_rate,
+        "success_rate": success_rate,  # legacy: includes signature-blocked as failures
+        "agent_run_success_rate": agent_run_success_rate,  # honest metric
+        "agent_run_total": n_agent_run,
+        "agent_run_successes": n_agent_run_succeeded,
+        "signature_blocked": n_signature_blocked,
+        "signature_memory_enabled": enable_signature_memory,
+        "pipeline_health": {
+            "fallback_attack_rate": n_fallback / max(1, len(adversarial_prompts)),
+            "fallback_attacks": n_fallback,
+            "refusal_rate": n_refused / max(1, len(attack_records)),
+            "refusals": n_refused,
+            "total_iterations": total_iterations,
+            "mean_iters_to_success": mean_iters_to_success,
+        },
         "primary_exploit_vector": synthesis.primary_exploit_vector.value,
         "policy_coverage": json.loads(policy.policy_coverage.model_dump_json()),
         "enforcement_rules": len(policy.enforcement_rules),
@@ -492,6 +590,14 @@ def _run_round(
         ],
     }
 
+    console.print(
+        f"\n  [bold]Honest metrics:[/] agent-run success = "
+        f"{n_agent_run_succeeded}/{n_agent_run} ({agent_run_success_rate:.2f}); "
+        f"signature-blocked = {n_signature_blocked}; "
+        f"fallback prompts = {n_fallback}/{len(adversarial_prompts)}; "
+        f"refusals = {n_refused}/{len(attack_records)}"
+    )
+
     return {
         "tool": working_tool,
         "profile": profile,
@@ -501,6 +607,7 @@ def _run_round(
         "policy": policy,
         "summary": summary,
         "success_rate": success_rate,
+        "agent_run_success_rate": agent_run_success_rate,
     }
 
 

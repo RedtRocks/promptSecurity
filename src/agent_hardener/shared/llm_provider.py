@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import subprocess
 import shutil
+import warnings
 from typing import Any, Optional
 
 import litellm
@@ -52,6 +53,19 @@ class LLMProvider:
             self._grader_family = self._primary_family
             self._grader_params = self._primary_params
 
+        # Research validity: same-family attacker + grader produces self-consistent
+        # scores that should not be reported as independent measurements.
+        if not settings.grader_model or self._grader_family == self._primary_family:
+            warnings.warn(
+                "LLM-as-judge is using the same model family as the attacker "
+                f"(primary={settings.default_model}, grader={settings.grader_model or '(same)'}). "
+                "Success scores are self-consistent and NOT valid as independent measurements. "
+                "Set grader_model to a different family (e.g. attacker=ollama/qwen3.5, "
+                "grader=anthropic/claude-3-5-sonnet) before reporting results.",
+                UserWarning,
+                stacklevel=2,
+            )
+
     # ── private helpers ───────────────────────────────────────────────────────
 
     @staticmethod
@@ -89,6 +103,28 @@ class LLMProvider:
                 }
             )
         return Router(model_list=model_list, num_retries=3, retry_after=5)
+
+    def _resolve_ollama_base_url(self) -> str:
+        """Pick the Ollama base URL to use for direct HTTP calls.
+
+        Prefers a local Ollama daemon at http://localhost:11434 when one is reachable
+        (useful on CUDA-equipped hosts where Ollama runs locally), and otherwise falls
+        back to the configured Settings.ollama_base_url. Returns "" when no Ollama
+        endpoint is configured at all.
+        """
+        configured = (self._settings.ollama_base_url or "").rstrip("/")
+        if not _uses_ollama_model(self._settings):
+            return configured
+
+        localhost = "http://localhost:11434"
+        try:
+            resp = requests.get(f"{localhost}/api/tags", timeout=1.5)
+            if resp.status_code == 200:
+                return localhost
+        except requests.RequestException:
+            pass
+
+        return configured
 
     # ── public API ────────────────────────────────────────────────────────────
 

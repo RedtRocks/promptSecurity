@@ -1,0 +1,7 @@
+load_seconds=0.694331
+compute_seconds=1.060566
+total_seconds=1.754897
+total_rows=160000
+success_count=50000
+score_sum=60911.117188
+max_score=0.999892

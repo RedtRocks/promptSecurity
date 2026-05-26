@@ -134,6 +134,11 @@ class AdversarialPrompt(BaseModel):
         default_factory=dict,
         description="Structured spec for the grading function: required_tools, sequence, goal",
     )
+    is_fallback: bool = Field(
+        default=False,
+        description="True when this prompt came from the hardcoded fallback template "
+        "(LLM generation failed). Pipeline-health metric — report rate separately.",
+    )
 
 
 class ToolCall(BaseModel):
@@ -192,6 +197,10 @@ class AttackRecord(BaseModel):
     failed_tool_calls: list[ToolCall] = Field(default_factory=list)
     failure_type: FailureType = FailureType.NOT_APPLICABLE
     attack_trajectory: list[AttackIteration] = Field(default_factory=list)
+    # When n_repeats > 1, contains the final_score from each independent run.
+    # `final_score` is the mean of these. Used for variance / CI reporting.
+    seed_scores: list[float] = Field(default_factory=list)
+    seeds_used: list[int] = Field(default_factory=list)
 
 
 # ─────────────────────────────── Stage 2 schemas ─────────────────────────────

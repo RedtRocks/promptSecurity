@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Computer\\\\Coding\\\\capstone\" -Recurse -File)",
+      "Bash(Select-Object -Property FullName, Length)",
+      "Bash(Sort-Object FullName)"
+    ]
+  }
+}
