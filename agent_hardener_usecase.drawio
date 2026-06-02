@@ -1,0 +1,143 @@
+<mxfile host="app.diagrams.net" modified="2026-05-27T00:00:00.000Z" agent="claude" version="24.0.0">
+  <diagram name="UseCase" id="usecase1">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="boundary" value="Agent Hardener Pipeline" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;verticalAlign=top;fontSize=16;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="280" y="40" width="1040" height="1000" as="geometry" />
+        </mxCell>
+
+        <mxCell id="actor_researcher" value="Security Researcher" style="shape=umlActor;verticalLabelPosition=bottom;labelBackgroundColor=#ffffff;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="80" y="480" width="40" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="actor_llm" value="LLM Provider&#10;(OpenAI / Anthropic / Ollama)" style="shape=umlActor;verticalLabelPosition=bottom;labelBackgroundColor=#ffffff;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="240" width="40" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="actor_agent" value="Target Agent&#10;(MCP endpoint)" style="shape=umlActor;verticalLabelPosition=bottom;labelBackgroundColor=#ffffff;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="500" width="40" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="actor_consumer" value="Report Consumer" style="shape=umlActor;verticalLabelPosition=bottom;labelBackgroundColor=#ffffff;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="820" width="40" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_load" value="Load Tool Definition" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="340" y="80" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_config" value="Configure Run" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="560" y="80" width="180" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_profile" value="Profile Tool Semantics" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="340" y="180" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_generate" value="Generate Adversarial Prompts" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="560" y="180" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_refine" value="Refine Attacks&#10;(Red-Agent-Reflect)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="800" y="180" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_runcycle" value="Run Attack Cycle&#10;Against Live Agent" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="560" y="280" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_grade" value="Grade Trajectories&#10;(LLM-as-Judge)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="800" y="280" width="180" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_seeds" value="Run Seed Sweeps&#10;(variance)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="280" width="170" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_baseline_tpl" value="Baseline:&#10;Template Attacks" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="180" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_baseline_nr" value="Baseline:&#10;No-Refine" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="100" width="170" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_analyze" value="Analyze Failed Defenses" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="340" y="400" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_synth" value="Synthesize Findings" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="560" y="400" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_recedits" value="Recommend Tool Edits" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="780" y="400" width="180" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_annotate" value="Annotate Confidentiality&#10;&amp; Capabilities" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="340" y="500" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_buildpol" value="Build SAMOS Policy" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="600" y="500" width="180" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_harden" value="Run Hardening Loop&#10;(iterate until target)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="560" y="620" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_enforce" value="Enforce Prior-Round&#10;Policy at Dispatch" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="820" y="620" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_verify" value="Replay Through&#10;Policy Verifier" style="ellipse;whiteSpace=wrap;html=1;fillColor=#b0e3e6;strokeColor=#0e8088;" vertex="1" parent="1">
+          <mxGeometry x="340" y="740" width="180" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_coverage" value="Compute Policy Coverage" style="ellipse;whiteSpace=wrap;html=1;fillColor=#b0e3e6;strokeColor=#0e8088;" vertex="1" parent="1">
+          <mxGeometry x="560" y="740" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_report" value="Emit report.json&#10;+ report.html" style="ellipse;whiteSpace=wrap;html=1;fillColor=#b0e3e6;strokeColor=#0e8088;" vertex="1" parent="1">
+          <mxGeometry x="800" y="740" width="180" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_manifest" value="Emit run_manifest.json&#10;(reproducibility)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#b0e3e6;strokeColor=#0e8088;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="740" width="200" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="uc_agg" value="Aggregate Cross-Run Results" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="400" y="880" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uc_kappa" value="Compute Cohen's Kappa&#10;(inter-rater agreement)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="680" y="880" width="220" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_researcher" target="uc_load"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_researcher" target="uc_config"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_researcher" target="uc_harden"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_researcher" target="uc_runcycle"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_researcher" target="uc_agg"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_researcher" target="uc_kappa"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="e7" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_llm" target="uc_generate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e8" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_llm" target="uc_refine"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e9" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_llm" target="uc_grade"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e10" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_llm" target="uc_profile"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e11" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_llm" target="uc_analyze"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e12" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_llm" target="uc_buildpol"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="e13" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_agent" target="uc_runcycle"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e14" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_agent" target="uc_enforce"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="e15" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_consumer" target="uc_report"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e16" style="endArrow=none;html=1;" edge="1" parent="1" source="actor_consumer" target="uc_manifest"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="i1" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_harden" target="uc_runcycle"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="i2" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_harden" target="uc_analyze"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="i3" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_harden" target="uc_buildpol"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="i4" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_runcycle" target="uc_grade"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="i5" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_runcycle" target="uc_generate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="i6" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_harden" target="uc_verify"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="i7" value="&lt;&lt;include&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_verify" target="uc_coverage"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="x1" value="&lt;&lt;extend&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_refine" target="uc_generate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="x2" value="&lt;&lt;extend&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_seeds" target="uc_runcycle"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="x3" value="&lt;&lt;extend&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_baseline_tpl" target="uc_generate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="x4" value="&lt;&lt;extend&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_baseline_nr" target="uc_refine"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="x5" value="&lt;&lt;extend&gt;&gt;" style="endArrow=open;html=1;dashed=1;endSize=8;" edge="1" parent="1" source="uc_enforce" target="uc_runcycle"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="f1" style="endArrow=open;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="uc_recedits" target="uc_annotate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f2" style="endArrow=open;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="uc_coverage" target="uc_report"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f3" style="endArrow=open;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="uc_report" target="uc_manifest"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

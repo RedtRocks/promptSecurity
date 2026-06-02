@@ -683,6 +683,81 @@ def _load_tool_definition(path: Path) -> "MCPToolDefinition":
     return MCPToolDefinition.from_mcp_json(data)
 
 
+@app.command()
+def gateway(
+    policy_file: Path = typer.Option(
+        ...,
+        "--policy", "-p",
+        help="Path to a SAMOS policy JSON, a report.json, or a hardening round entry.",
+        exists=True, file_okay=True, dir_okay=False, readable=True,
+    ),
+    agent_endpoint: str = typer.Option(
+        ...,
+        "--agent-endpoint",
+        help="URL of the unprotected agent the gateway will forward to (e.g., http://localhost:8080).",
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
+    port: int = typer.Option(8090, "--port", min=1, max=65535, help="Bind port."),
+    audit_log: Optional[Path] = typer.Option(
+        None, "--audit-log",
+        help="Optional JSONL file to append every enforcement event to.",
+    ),
+    agent_auth_token: str = typer.Option(
+        "", "--agent-auth-token",
+        help="Bearer token forwarded to the inner agent (defaults to none).",
+    ),
+) -> None:
+    """Launch the SAMOS policy gateway in front of an existing agent endpoint.
+
+    The gateway loads a policy, accepts the same {"prompt": "..."} POST /run
+    contract as the underlying agent, and rewrites any tool call the policy
+    would block before returning the trajectory to the caller. Enforcement
+    decisions are recorded in an in-memory ring (queryable via GET /audit) and
+    optionally appended to --audit-log as JSONL.
+    """
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        err_console.print(
+            "[bold red]ERROR:[/] uvicorn is required to launch the gateway.\n"
+            "Install with: [cyan]pip install -e \".[dev]\"[/]"
+        )
+        raise typer.Exit(1)
+
+    from agent_hardener.gateway_server import create_app
+
+    try:
+        app_instance = create_app(
+            policy_path=policy_file,
+            agent_endpoint=agent_endpoint,
+            agent_auth_token=agent_auth_token,
+            audit_log_path=audit_log,
+        )
+    except Exception as exc:
+        err_console.print(f"[bold red]ERROR loading policy or building app:[/] {exc}")
+        raise typer.Exit(1)
+
+    policy_tool = app_instance.state.policy.tool_name
+    n_rules = len(app_instance.state.policy.enforcement_rules)
+
+    console.print(Panel(
+        f"[bold cyan]agent-hardener gateway[/] [dim]v{__version__}[/]\n\n"
+        f"  [bold]Policy:[/]         {policy_file}\n"
+        f"  [bold]Protected tool:[/] [cyan]{policy_tool}[/]\n"
+        f"  [bold]Enforcement:[/]    {n_rules} rule(s) loaded\n"
+        f"  [bold]Inner agent:[/]    {agent_endpoint}\n"
+        f"  [bold]Audit log:[/]      {audit_log if audit_log else '(in-memory only)'}\n"
+        f"  [bold]Listening:[/]      [green]http://{host}:{port}[/]\n\n"
+        f"  [dim]Endpoints:[/] [cyan]POST /run[/]  [cyan]GET /health[/]  "
+        f"[cyan]GET /policy[/]  [cyan]GET /audit[/]  [cyan]POST /tools/list[/]",
+        border_style="cyan",
+        padding=(1, 2),
+    ))
+
+    import uvicorn
+    uvicorn.run(app_instance, host=host, port=port, log_level="info")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

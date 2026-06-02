@@ -36,6 +36,12 @@ agent-hardener analyze --tool-file mcp_tools/read_file.yaml --config config.yaml
 # Hardening with live policy enforcement (round N>=2 wraps the agent with round N-1's policy)
 agent-hardener harden --tool-file mcp_tools/read_file.yaml --config config.yaml --enforce-prior-policy
 
+# Production deployment: launch a SAMOS policy gateway in front of an existing agent
+agent-hardener gateway --policy hardener_output/report.json \
+  --agent-endpoint http://localhost:8080 \
+  --host 127.0.0.1 --port 8090 \
+  --audit-log hardener_output/gateway_audit.jsonl
+
 # Cross-run aggregation: combine multiple run_manifest.json + report.json into a CSV
 python scripts/aggregate_runs.py hardener_output/runA hardener_output/runB --out runs_summary.csv
 
@@ -141,7 +147,9 @@ This is a **capstone project** that is also being written up as a research paper
 
 7. **No baseline modes → both baselines now available.** `--baseline-attacks template` skips the LLM attacker entirely and emits only fallback templates (so the LLM attacker's marginal contribution is measurable). `--no-refine` (equivalently `--max-iterations 0`) skips Stage 1.3 refinement so you can isolate the value of iterative refinement. Both flow through to `Settings.baseline_attacks` and `Settings.max_iterations`.
 
-8. **Policy was never enforced at dispatch time → live gateway built.** `agent_hardener.verifier.PolicyEnforcingAgentClient` is a drop-in `AgentClient` wrapper that applies the same three deterministic gates as the offline verifier (capability / taint / enforcement-rule) to every trajectory returned by the inner agent. Blocked calls are rewritten as failed; subsequent calls are dropped (simulating early-exit). The harden loop honors `Settings.enforce_prior_policy` (CLI: `--enforce-prior-policy`): when set, round N≥2 wraps the agent with the policy from round N-1, giving a deterministic end-to-end "would the policy have blocked this attack?" measurement. **Still required:** integrate with an actual MCP gateway server for production use; current shim is post-hoc per-trajectory, which suffices for the paper's measurement question.
+8. **Policy was never enforced at dispatch time → live gateway built.** Two layers:
+   - `agent_hardener.verifier.PolicyEnforcingAgentClient` — drop-in `AgentClient` wrapper applying the three deterministic gates to every trajectory returned by the inner agent. Used in-process during hardening rounds; gated by `Settings.enforce_prior_policy` (CLI `--enforce-prior-policy`) so round N≥2 sees the policy from round N-1 enforced on returned trajectories.
+   - `agent_hardener.gateway_server` — FastAPI service that turns a generated `SAMOSPolicy` JSON into a production runtime control. Loads the policy at startup, exposes `POST /run` matching the inner agent's contract, and applies the same three gates before returning the trajectory. Endpoints: `POST /run`, `GET /health`, `GET /policy`, `GET /audit`, `POST /tools/list`. Audit ring + optional JSONL sink for observability. Launch with `agent-hardener gateway --policy report.json --agent-endpoint http://...:8080`.
 
 9. **Inter-rater agreement tooling shipped.** `scripts/cohen_kappa.py` computes Cohen's κ from a two-column CSV with optional bootstrap CI. Useful for both (a) human-vs-LLM grader comparisons once labels exist, and (b) LLM-vs-LLM cross-family grader agreement now.
 
@@ -155,7 +163,6 @@ This is a **capstone project** that is also being written up as a research paper
 
 13. **CUDA showcase is off-path.** `cuda_showcase/` accelerates post-hoc report aggregation. Drop from the security paper or write a separate, narrow HPC paper.
 
-14. **No native MCP gateway server.** `PolicyEnforcingAgentClient` is a post-hoc trajectory rewriter, not a live JSON-RPC gateway. For a production deployment story, build a separate FastAPI service that mounts `/run` and applies the policy to each tool dispatch as it happens, not after the trajectory returns.
 
 ### SAMOS policy verifier (`agent_hardener/verifier/`)
 
@@ -184,7 +191,6 @@ Known approximations (documented so reviewers can challenge them):
 
 In priority order. Items 1–9 above are addressed in code; the items below are what's still required:
 
-- [ ] **Native MCP gateway server** — wrap `PolicyEnforcingAgentClient` in a FastAPI service so the policy enforces at JSON-RPC dispatch time, not after-the-fact on a returned trajectory. Useful for end-to-end live demos.
 - [ ] **Independent-grader study.** Collect human labels on a stratified subset (e.g. 40 trajectories spanning all 8 harm categories and 3 exploit types), and report Cohen's κ between the human labels and each LLM judge. Script: `scripts/grade_with_human_labels.py`.
 - [ ] **Seed sweeps.** Add `seeds: list[int]` to `run_attack_cycle`; aggregate runs in the report with mean ± std and bootstrap CIs. Update `run_manifest.json` to list the seeds used.
 - [ ] **Baseline modes.** `--baseline template` (skip LLM attack generation), `--baseline no-refine` (skip Stage 1.3) so the marginal contribution of each component is measurable.
