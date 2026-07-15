@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from typing import Any
 
 from agent_hardener.shared.llm_provider import LLMProvider
 from agent_hardener.shared.schemas import (
@@ -136,7 +137,7 @@ def _format_parameters(tool: MCPToolDefinition) -> str:
     return "\n".join(lines)
 
 
-def _try_parse_json_object(raw: str) -> dict | None:
+def _try_parse_json_object(raw: str) -> dict[str, Any] | None:
     text = (raw or "").strip()
     if not text:
         return None
@@ -207,7 +208,7 @@ def _fallback_profile(tool: MCPToolDefinition) -> ToolProfile:
     )
 
 
-def _build_profile(tool_name: str, data: dict) -> ToolProfile:
+def _build_profile(tool_name: str, data: dict[str, Any]) -> ToolProfile:
     sources = [
         DataEndpoint(
             name=s["name"],

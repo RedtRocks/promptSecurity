@@ -134,7 +134,7 @@ def _format_trajectory(t: AgentTrajectory) -> str:
     return "\n".join(lines)
 
 
-def _truncate_params(params: dict) -> str:
+def _truncate_params(params: dict[str, Any]) -> str:
     text = json.dumps(params)
     return text[:150] + "..." if len(text) > 150 else text
 

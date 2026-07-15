@@ -58,6 +58,13 @@ CSV_COLUMNS = [
     "policy_partially_mitigated",
     "policy_requiring_model_level",
     "policy_unmitigated",
+    # Security/utility tradeoff — the headline research metric.
+    "attack_block_rate",
+    "mitigation_rate",
+    "benign_pass_rate",
+    "over_block_rate",
+    "utility_security_f1",
+    "degenerate_deny_all",
 ]
 
 
@@ -106,6 +113,7 @@ def _row_from_dir(d: Path, success_threshold: float = 0.95) -> dict[str, Any] | 
     mean_seed_stddev = sum(seed_stddevs) / len(seed_stddevs) if seed_stddevs else 0.0
 
     coverage = report.get("stage3_policy", {}).get("policy_coverage", {})
+    su = report.get("security_utility", {})
 
     return {
         "manifest_path": str(manifest_path),
@@ -137,13 +145,65 @@ def _row_from_dir(d: Path, success_threshold: float = 0.95) -> dict[str, Any] | 
         "policy_partially_mitigated": coverage.get("attacks_partially_mitigated", ""),
         "policy_requiring_model_level": coverage.get("attacks_requiring_model_level_defense", ""),
         "policy_unmitigated": coverage.get("unmitigated_attacks", ""),
+        "attack_block_rate": su.get("attack_block_rate", ""),
+        "mitigation_rate": su.get("mitigation_rate", ""),
+        "benign_pass_rate": su.get("benign_pass_rate", ""),
+        "over_block_rate": su.get("over_block_rate", ""),
+        "utility_security_f1": su.get("utility_security_f1", ""),
+        "degenerate_deny_all": su.get("degenerate_deny_all", ""),
     }
+
+
+# Numeric metrics that get a mean±std across independent runs of the same tool.
+_BY_TOOL_METRICS = [
+    "attack_block_rate",
+    "mitigation_rate",
+    "benign_pass_rate",
+    "over_block_rate",
+    "utility_security_f1",
+    "success_rate",
+]
+
+
+def _aggregate_by_tool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group per-run rows by tool_name and compute mean±std per metric.
+
+    This is the statistical-rigor view for the paper: run each tool N independent
+    times, then read off the mean and standard deviation of ABR / mitigation /
+    BPR / F1 across the N runs, rather than quoting a single noisy point estimate.
+    """
+    by_tool: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_tool.setdefault(row.get("tool_name", "?"), []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for tool, tool_rows in sorted(by_tool.items()):
+        agg: dict[str, Any] = {"tool_name": tool, "n_runs": len(tool_rows)}
+        for metric in _BY_TOOL_METRICS:
+            vals = [
+                float(r[metric])
+                for r in tool_rows
+                if r.get(metric) not in ("", None)
+            ]
+            if vals:
+                mean = sum(vals) / len(vals)
+                agg[f"{metric}_mean"] = round(mean, 4)
+                agg[f"{metric}_std"] = round(_stddev(vals), 4)
+            else:
+                agg[f"{metric}_mean"] = ""
+                agg[f"{metric}_std"] = ""
+        out.append(agg)
+    return out
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("run_dirs", nargs="+", type=Path, help="Directories produced by agent-hardener")
     p.add_argument("--out", type=Path, default=Path("runs_summary.csv"), help="Output CSV path")
+    p.add_argument(
+        "--by-tool", type=Path, default=None,
+        help="Also write a per-tool mean±std CSV aggregating independent runs of each tool",
+    )
     p.add_argument(
         "--success-threshold", type=float, default=0.95,
         help="Score above which an attack is counted as success when computing rates",
@@ -167,8 +227,19 @@ def main() -> int:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-
     print(f"Wrote {len(rows)} rows to {args.out}")
+
+    if args.by_tool is not None:
+        by_tool_rows = _aggregate_by_tool(rows)
+        fieldnames = ["tool_name", "n_runs"] + [
+            f"{m}_{stat}" for m in _BY_TOOL_METRICS for stat in ("mean", "std")
+        ]
+        with args.by_tool.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(by_tool_rows)
+        print(f"Wrote {len(by_tool_rows)} per-tool rows to {args.by_tool}")
+
     return 0
 
 

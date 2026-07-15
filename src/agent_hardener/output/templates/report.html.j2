@@ -269,6 +269,11 @@ hr.sep { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   padding: 28px; text-align: center; color: var(--text-3);
   background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius);
 }
+details.disclose > summary {
+  cursor: pointer; color: var(--text-2); font-size: 13px; font-weight: 500;
+  padding: 6px 0; user-select: none;
+}
+details.disclose > summary:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -309,12 +314,12 @@ hr.sep { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
     <div class="metric {% if headline.success_rate > 0.5 %}danger{% elif headline.success_rate > 0 %}warning{% else %}success{% endif %}">
       <div class="metric-label">Attack success</div>
       <div class="metric-value">{{ headline.successful_attacks }}/{{ headline.total_attacks }}</div>
-      <div class="metric-sub">{{ '%.1f' | format(headline.success_rate * 100) }}% of attempts</div>
+      <div class="metric-sub">{{ '%.1f' | format(headline.success_rate * 100) }}% of attempts{% if headline.success_rate_ci_low is not none %} · 95% CI [{{ '%.0f' | format(headline.success_rate_ci_low * 100) }}–{{ '%.0f' | format(headline.success_rate_ci_high * 100) }}%]{% endif %}</div>
     </div>
     <div class="metric success">
       <div class="metric-label">Policy fully blocked</div>
       <div class="metric-value">{{ headline.fully_blocked_by_policy }}</div>
-      <div class="metric-sub">of {{ headline.successful_attacks }} · {{ '%.0f' | format(headline.policy_coverage_pct * 100) }}% coverage</div>
+      <div class="metric-sub">of {{ headline.successful_attacks }} · {{ '%.0f' | format(headline.policy_coverage_pct * 100) }}% coverage{% if headline.policy_coverage_ci_low is not none %} · 95% CI [{{ '%.0f' | format(headline.policy_coverage_ci_low * 100) }}–{{ '%.0f' | format(headline.policy_coverage_ci_high * 100) }}%]{% endif %}</div>
     </div>
     <div class="metric warning">
       <div class="metric-label">Partially mitigated</div>
@@ -557,6 +562,75 @@ hr.sep { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   <div class="section-head">
     <h2><span class="num">03</span>SAMOS policy</h2>
     <div class="sub">Information-flow control policy generated from the attacks</div>
+  </div>
+
+  {# ── Security / Utility tradeoff — the headline research metric ── #}
+  <div class="card" style="margin-bottom: var(--gap); {% if security_utility.degenerate_deny_all %}border-color: var(--danger);{% endif %}">
+    <div class="card-head">
+      <div class="card-title">Security / utility tradeoff</div>
+      <div class="card-sub">
+        Attack coverage alone is gameable: a policy that disables the tool blocks every attack.
+        Benign tasks are replayed through the same gates to measure over-blocking.
+      </div>
+    </div>
+
+    {% if security_utility.n_benign_tasks == 0 %}
+      <div class="empty">Utility unmeasured — no benign-task suite found for <code>{{ policy.tool_name }}</code>. Add <code>benign_tasks/{{ policy.tool_name }}.yaml</code> to measure the tradeoff.</div>
+    {% else %}
+      {% if security_utility.degenerate_deny_all %}
+      <div style="background: color-mix(in srgb, var(--danger) 14%, var(--surface-2)); border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border)); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px; color: var(--danger); font-size: 13px;">
+        <strong>⚠ Degenerate deny-all policy.</strong>
+        This policy blocks <em>every</em> legitimate task ({{ security_utility.benign_allowed }}/{{ security_utility.n_benign_tasks }} allowed).
+        Its 100% attack coverage is meaningless — the tool is effectively disabled. Utility/security F1 = 0.
+      </div>
+      {% endif %}
+
+      <div class="metrics" style="margin: 0;">
+        <div class="metric {% if security_utility.attack_block_rate >= 0.8 %}success{% elif security_utility.attack_block_rate >= 0.4 %}warning{% else %}danger{% endif %}">
+          <div class="metric-label">Attack block rate</div>
+          <div class="metric-value">{{ '%.0f' | format(security_utility.attack_block_rate * 100) }}%</div>
+          <div class="metric-sub">{{ security_utility.attacks_blocked }}/{{ security_utility.n_successful_attacks }} successful attacks · hard block</div>
+        </div>
+        <div class="metric {% if security_utility.mitigation_rate >= 0.8 %}success{% elif security_utility.mitigation_rate >= 0.4 %}warning{% else %}danger{% endif %}">
+          <div class="metric-label">Mitigation rate</div>
+          <div class="metric-value">{{ '%.0f' | format(security_utility.mitigation_rate * 100) }}%</div>
+          <div class="metric-sub">{{ security_utility.attacks_mitigated }}/{{ security_utility.n_successful_attacks }} · incl. confirmation/audit gates</div>
+        </div>
+        <div class="metric {% if security_utility.benign_pass_rate >= 0.8 %}success{% elif security_utility.benign_pass_rate >= 0.4 %}warning{% else %}danger{% endif %}">
+          <div class="metric-label">Benign pass rate</div>
+          <div class="metric-value">{{ '%.0f' | format(security_utility.benign_pass_rate * 100) }}%</div>
+          <div class="metric-sub">{{ security_utility.benign_allowed }}/{{ security_utility.n_benign_tasks }} legitimate tasks · utility</div>
+        </div>
+        <div class="metric {% if security_utility.over_block_rate <= 0.2 %}success{% elif security_utility.over_block_rate <= 0.5 %}warning{% else %}danger{% endif %}">
+          <div class="metric-label">Over-block rate</div>
+          <div class="metric-value">{{ '%.0f' | format(security_utility.over_block_rate * 100) }}%</div>
+          <div class="metric-sub">false positives against legitimate use</div>
+        </div>
+        <div class="metric {% if security_utility.utility_security_f1 >= 0.7 %}success{% elif security_utility.utility_security_f1 >= 0.4 %}warning{% else %}danger{% endif %}">
+          <div class="metric-label">Utility·security F1</div>
+          <div class="metric-value">{{ '%.2f' | format(security_utility.utility_security_f1) }}</div>
+          <div class="metric-sub">harmonic mean — deny-all can't game this</div>
+        </div>
+      </div>
+
+      <details class="disclose" style="margin-top: 14px;">
+        <summary>Per benign-task outcomes</summary>
+        <div class="table-wrap">
+          <table class="dt">
+            <thead><tr><th>Task</th><th>Outcome</th><th>Reason (if blocked)</th></tr></thead>
+            <tbody>
+              {% for u in security_utility.utility_results %}
+              <tr>
+                <td class="mono">{{ u.task_id }}</td>
+                <td>{% if u.allowed %}<span class="pill ok">allowed</span>{% else %}<span class="pill fail">blocked</span>{% endif %}</td>
+                <td class="muted" style="font-size: 12px;">{{ u.blocking_reason }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    {% endif %}
   </div>
 
   <div class="grid-2">

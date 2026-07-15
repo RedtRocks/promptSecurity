@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +46,9 @@ class Settings(BaseSettings):
     # paper baseline that quantifies what the LLM attacker adds over deterministic
     # templates.
     baseline_attacks: str = Field("llm")  # "llm" | "template"
+    # Number of distinct attack strategies (techniques) generated per harm
+    # category. >1 produces broader, stronger coverage at ~breadth× the cost.
+    attack_breadth: int = Field(1, ge=1, le=8)
     # Seed sweeps: number of independent repeats per attack cycle. >1 populates
     # AttackRecord.seed_scores so the report can show variance / bootstrap CIs.
     n_repeats: int = Field(1, ge=1, le=10)

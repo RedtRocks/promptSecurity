@@ -139,6 +139,11 @@ class AdversarialPrompt(BaseModel):
         description="True when this prompt came from the hardcoded fallback template "
         "(LLM generation failed). Pipeline-health metric — report rate separately.",
     )
+    attack_strategy: str = Field(
+        default="",
+        description="Key of the red-team technique used to construct this prompt "
+        "(see stage1/attack_strategies.py). Empty for template/fallback attacks.",
+    )
 
 
 class ToolCall(BaseModel):
@@ -391,3 +396,80 @@ class SAMOSPolicy(BaseModel):
     gateway_enforcement: GatewayEnforcementSpec
     deployment_spec: DeploymentSpec
     policy_coverage: PolicyCoverage
+
+
+# ────────────────────── Security/utility evaluation schemas ───────────────────
+#
+# A policy that blocks every attack by disabling the tool wholesale scores 100%
+# attack coverage but destroys the tool's usefulness. Research-grade evaluation
+# therefore MUST also measure how many *legitimate* uses the same policy blocks.
+# These schemas capture the benign side of the tradeoff.
+
+
+class BenignTask(BaseModel):
+    """One legitimate use of a tool that a good policy must NOT block.
+
+    The `tool_calls` are the trajectory a well-behaved agent would produce for a
+    benign request. Replaying them through the policy tells us whether the policy
+    over-blocks (a false positive against utility).
+    """
+
+    task_id: str
+    description: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+
+
+class BenignTaskSuite(BaseModel):
+    """A corpus of benign tasks for one tool."""
+
+    tool_name: str
+    tasks: list[BenignTask] = Field(default_factory=list)
+
+
+class UtilityResult(BaseModel):
+    """Per-benign-task replay outcome."""
+
+    task_id: str
+    allowed: bool
+    verdict_status: str
+    blocking_reason: str = ""
+
+
+class SecurityUtilityReport(BaseModel):
+    """The security/utility tradeoff — the headline research metric.
+
+    attack_block_rate (ABR): fraction of successful attacks the policy blocks.
+        Higher is more secure. A deny-everything policy trivially reaches 1.0.
+    benign_pass_rate (BPR): fraction of legitimate tasks the policy still allows.
+        Higher preserves more utility. A deny-everything policy collapses to 0.0.
+    over_block_rate: 1 - BPR. The false-positive rate against legitimate use.
+    utility_security_f1: harmonic mean of ABR and BPR — a single number that a
+        degenerate deny-all policy CANNOT game (its BPR is 0, so F1 is 0).
+    """
+
+    tool_name: str
+    n_successful_attacks: int = 0
+    attacks_blocked: int = 0
+    attack_block_rate: float = 0.0
+
+    # Secondary security view: hard BLOCK is not the only defense. A successful
+    # attack that trips a REQUIRE_CONFIRMATION / AUDIT gate is mitigated by a
+    # human-in-the-loop check, not silently allowed. attacks_mitigated counts
+    # BLOCK + partial mitigations; mitigation_rate is over successful attacks.
+    # These are reported ALONGSIDE (never instead of) the strict block-based ABR
+    # and F1, so the headline metric cannot be inflated by soft gates.
+    attacks_mitigated: int = 0
+    mitigation_rate: float = 0.0
+
+    n_benign_tasks: int = 0
+    benign_allowed: int = 0
+    benign_pass_rate: float = 0.0
+    over_block_rate: float = 0.0
+
+    utility_security_f1: float = 0.0
+    degenerate_deny_all: bool = Field(
+        default=False,
+        description="True when the policy blocks every benign task (BPR == 0): "
+        "coverage is meaningless because the tool is effectively disabled.",
+    )
+    utility_results: list[UtilityResult] = Field(default_factory=list)

@@ -1,0 +1,22 @@
+name: manage_calendar
+description: Create or update a calendar event and invite attendees
+inputSchema:
+  type: object
+  properties:
+    title:
+      type: string
+      description: Event title
+    attendees:
+      type: array
+      items:
+        type: string
+      description: Attendee email addresses
+    start_time:
+      type: string
+      description: ISO 8601 start time
+    location:
+      type: string
+      description: Event location or meeting link
+  required:
+  - title
+  - start_time

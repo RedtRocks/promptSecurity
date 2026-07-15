@@ -11,9 +11,12 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jinja2 import Environment, PackageLoader, select_autoescape
+
+if TYPE_CHECKING:
+    from agent_hardener.verifier import VerifierVerdict
 
 from agent_hardener.shared.schemas import (
     AttackRecord,
@@ -30,14 +33,31 @@ def generate_report(
     policy: SAMOSPolicy,
     output_dir: Path,
     hardening_history: list[dict[str, Any]] | None = None,
+    success_threshold: float = 0.95,
 ) -> tuple[Path, Path]:
-    """Generate the JSON report and HTML dashboard."""
+    """Generate the JSON report and HTML dashboard.
+
+    success_threshold must match the run's attack_success_threshold so the
+    verifier and security/utility metrics count the same attacks as "successful".
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Deterministic verifier output — auditable per-record verdicts.
-    from agent_hardener.verifier import verify_all_records
-    verifier_verdicts = verify_all_records(attack_records, policy)
+    from agent_hardener.verifier import (
+        verify_all_records,
+        evaluate_security_utility,
+        load_benign_suite,
+    )
+    verifier_verdicts = verify_all_records(attack_records, policy, success_threshold)
     verdicts_by_id = {v.record_id: v for v in verifier_verdicts}
+
+    # Security/utility tradeoff: replay benign tasks through the SAME gates so a
+    # deny-everything policy (100% attack coverage) is exposed by a collapsed
+    # benign-pass-rate. Missing benign suite -> utility reported as unmeasured.
+    benign_suite = load_benign_suite(tool.name)
+    security_utility = evaluate_security_utility(
+        attack_records, policy, benign_suite, success_threshold
+    )
 
     report_data = {
         "pipeline_version": "1.0",
@@ -47,6 +67,7 @@ def generate_report(
         "stage2_failure_analysis": json.loads(analysis.model_dump_json()),
         "stage3_policy": json.loads(policy.model_dump_json()),
         "policy_verifier_verdicts": [v.to_dict() for v in verifier_verdicts],
+        "security_utility": json.loads(security_utility.model_dump_json()),
         "hardening_history": hardening_history or [],
     }
 
@@ -72,6 +93,7 @@ def generate_report(
         analysis=analysis,
         policy=policy,
         verifier_verdicts=[v.to_dict() for v in verifier_verdicts],
+        security_utility=security_utility,
         hardening_showcase=hardening_showcase,
         headline=headline,
         chart_data_json=json.dumps(chart_data),
@@ -83,10 +105,40 @@ def generate_report(
     return json_path, html_path
 
 
+def _bootstrap_proportion_ci(
+    outcomes: list[bool],
+    n_boot: int = 2000,
+    seed: int = 42,
+    ci: float = 0.95,
+) -> tuple[float, float] | None:
+    """Percentile bootstrap CI for a proportion (fraction of True in ``outcomes``).
+
+    Returns None when there is nothing to resample. Used to put honest error bars
+    on the headline attack-success rate and policy-coverage numbers so a reviewer
+    sees uncertainty, not just a point estimate. Deterministic given ``seed``.
+    """
+    import random
+
+    n = len(outcomes)
+    if n == 0:
+        return None
+    rng = random.Random(seed)
+    rates: list[float] = []
+    for _ in range(n_boot):
+        s = sum(outcomes[rng.randrange(n)] for _ in range(n))
+        rates.append(s / n)
+    rates.sort()
+    lo_q = (1 - ci) / 2
+    hi_q = 1 - lo_q
+    lo = rates[int(lo_q * len(rates))]
+    hi = rates[min(len(rates) - 1, int(hi_q * len(rates)))]
+    return (lo, hi)
+
+
 def _build_headline_metrics(
     records: list[AttackRecord],
     policy: SAMOSPolicy,
-    verdicts,
+    verdicts: list[VerifierVerdict],
 ) -> dict[str, Any]:
     """Top-of-page summary tiles."""
     n = len(records)
@@ -95,6 +147,20 @@ def _build_headline_metrics(
     cov = policy.policy_coverage
     n_succ_attacks = max(1, n_success)
     coverage_pct = cov.attacks_fully_blocked_by_policy / n_succ_attacks if n_success else 0.0
+
+    # Bootstrap CIs (percentile) so headline rates carry error bars, not just a
+    # point estimate. Success rate resamples the per-record success indicator;
+    # coverage resamples the "blocked?" indicator over the successful-attack subset.
+    success_outcomes = [r.attempt_number_of_success is not None for r in records]
+    success_rate_ci = _bootstrap_proportion_ci(success_outcomes)
+    verdict_by_id = {v.record_id: v for v in verdicts}
+    blocked_over_success: list[bool] = []
+    for r in records:
+        if r.attempt_number_of_success is None:
+            continue
+        v = verdict_by_id.get(r.record_id)
+        blocked_over_success.append(bool(v and v.final_status.value == "BLOCKED"))
+    coverage_ci = _bootstrap_proportion_ci(blocked_over_success)
 
     # Seed sweep variance: only meaningful when at least one record has >1 score.
     seed_stddevs = []
@@ -116,6 +182,10 @@ def _build_headline_metrics(
         "total_attacks": n,
         "successful_attacks": n_success,
         "success_rate": (n_success / n) if n else 0.0,
+        "success_rate_ci_low": success_rate_ci[0] if success_rate_ci else None,
+        "success_rate_ci_high": success_rate_ci[1] if success_rate_ci else None,
+        "policy_coverage_ci_low": coverage_ci[0] if coverage_ci else None,
+        "policy_coverage_ci_high": coverage_ci[1] if coverage_ci else None,
         "refusals": n_refusals,
         "refusal_rate": (n_refusals / n) if n else 0.0,
         "fully_blocked_by_policy": cov.attacks_fully_blocked_by_policy,
@@ -133,8 +203,8 @@ def _build_headline_metrics(
 def _build_chart_data(
     records: list[AttackRecord],
     policy: SAMOSPolicy,
-    verdicts,
-) -> dict:
+    verdicts: list[VerifierVerdict],
+) -> dict[str, Any]:
     """Pre-compute data structures for Chart.js charts."""
 
     # Per-record summary: ID, harm, score, mean+/-std if seeds present, status.
@@ -182,7 +252,7 @@ def _build_chart_data(
     for v in verdicts:
         verdict_counts[v.final_status.value] = verdict_counts.get(v.final_status.value, 0) + 1
 
-    enforcement_actions = {}
+    enforcement_actions: dict[str, int] = {}
     for rule in policy.enforcement_rules:
         a = rule.action.value
         enforcement_actions[a] = enforcement_actions.get(a, 0) + 1
@@ -236,7 +306,7 @@ def _display_attack_intensity(raw: str) -> str:
 def _build_attack_summaries(
     records: list[AttackRecord],
     policy: SAMOSPolicy,
-    verdicts_by_id: dict,
+    verdicts_by_id: dict[str, VerifierVerdict],
 ) -> list[dict[str, object]]:
     """Per-attack rows enriched with verifier verdicts and seed-sweep variance."""
     summaries: list[dict[str, object]] = []

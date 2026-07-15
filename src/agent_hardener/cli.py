@@ -23,7 +23,11 @@ from rich.table import Table
 from agent_hardener import __version__
 
 if TYPE_CHECKING:
-    from agent_hardener.shared.schemas import MCPToolDefinition
+    from agent_hardener.shared.schemas import (
+        AdversarialPrompt,
+        AttackRecord,
+        MCPToolDefinition,
+    )
 
 app = typer.Typer(
     name="agent-hardener",
@@ -31,6 +35,18 @@ app = typer.Typer(
     rich_markup_mode="rich",
     no_args_is_help=True,
 )
+
+# On Windows, stdout/stderr default to the legacy code page (cp1252) when output
+# is piped or redirected, so Rich's Unicode spinners/box glyphs raise
+# UnicodeEncodeError. Force UTF-8 so runs are robust to non-tty stdout (CI logs,
+# `| tee`, background tasks). No-op where already UTF-8 or unsupported.
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        try:
+            _reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
 
 console = Console(stderr=False)
 err_console = Console(stderr=True)
@@ -99,6 +115,13 @@ def analyze(
         max=10,
         help="Number of independent repeats per attack cycle (>1 enables seed-sweep / variance reporting).",
     ),
+    attack_breadth: Optional[int] = typer.Option(
+        None,
+        "--attack-breadth",
+        min=1,
+        max=8,
+        help="Distinct attack strategies (techniques) per harm category. >1 = stronger, broader attacks.",
+    ),
     attack_parallelism: Optional[int] = typer.Option(
         None,
         "--attack-parallelism",
@@ -132,7 +155,6 @@ def analyze(
     from agent_hardener.shared.settings import Settings
     from agent_hardener.shared.llm_provider import LLMProvider
     from agent_hardener.shared.agent_client import AgentClient
-    from agent_hardener.shared.schemas import MCPToolDefinition
     from agent_hardener.stage1.profiler import profile_tool
     from agent_hardener.stage1.attacker import generate_attacks
     from agent_hardener.stage1.refiner import run_attack_cycle
@@ -171,6 +193,8 @@ def analyze(
             settings = settings.model_copy(update={"baseline_attacks": baseline_attacks})
         if n_repeats is not None:
             settings = settings.model_copy(update={"n_repeats": n_repeats})
+        if attack_breadth is not None:
+            settings = settings.model_copy(update={"attack_breadth": attack_breadth})
         if attack_parallelism is not None:
             settings = settings.model_copy(update={"attack_parallelism": attack_parallelism})
         if agent_endpoint:
@@ -201,6 +225,9 @@ def analyze(
     try:
         llm = LLMProvider(settings)
         agent = AgentClient(settings)
+        # Forward the tool's description + kb_context so an LLM-backed agent
+        # sees the definition under test (keyword agents ignore it).
+        agent.set_tool_context(tool)
     except Exception as exc:
         err_console.print(f"[bold red]ERROR initialising LLM/agent client:[/] {exc}")
         raise typer.Exit(1)
@@ -226,6 +253,7 @@ def analyze(
         adversarial_prompts = generate_attacks(
             tool, profile, llm,
             baseline_mode=settings.baseline_attacks,
+            breadth=settings.attack_breadth,
         )
         prog.update(
             t,
@@ -275,7 +303,7 @@ def analyze(
     attack_table.add_column("Iterations", width=10)
     attack_table.add_column("Refusal?", width=10)
 
-    def _run_single_attack(index_and_prompt):
+    def _run_single_attack(index_and_prompt: tuple[int, AdversarialPrompt]) -> AttackRecord:
         i, adv_prompt = index_and_prompt
         seeds_list = (
             list(range(1, settings.n_repeats + 1)) if settings.n_repeats > 1 else None
@@ -413,7 +441,7 @@ def analyze(
         prog.stop_task(t)
 
     cov = policy.policy_coverage
-    console.print(f"\n  [bold]Stage 3 complete:[/]")
+    console.print("\n  [bold]Stage 3 complete:[/]")
     console.print(f"    Fully blocked:           [green]{cov.attacks_fully_blocked_by_policy}[/]")
     console.print(f"    Partially mitigated:     [yellow]{cov.attacks_partially_mitigated}[/]")
     console.print(f"    Needs model-level def.:  [cyan]{cov.attacks_requiring_model_level_defense}[/]")
@@ -432,6 +460,7 @@ def analyze(
             analysis=stage2_report,
             policy=policy,
             output_dir=output_dir,
+            success_threshold=settings.attack_success_threshold,
         )
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
@@ -514,6 +543,13 @@ def harden(
         min=1,
         max=10,
         help="Number of independent repeats per attack cycle (>1 enables seed sweeps / variance reporting).",
+    ),
+    attack_breadth: Optional[int] = typer.Option(
+        None,
+        "--attack-breadth",
+        min=1,
+        max=8,
+        help="Distinct attack strategies (techniques) per harm category. >1 = stronger, broader attacks.",
     ),
     enforce_prior_policy: bool = typer.Option(
         False,
@@ -601,6 +637,8 @@ def harden(
             settings = settings.model_copy(update={"baseline_attacks": baseline_attacks})
         if n_repeats is not None:
             settings = settings.model_copy(update={"n_repeats": n_repeats})
+        if attack_breadth is not None:
+            settings = settings.model_copy(update={"attack_breadth": attack_breadth})
         if enforce_prior_policy:
             settings = settings.model_copy(update={"enforce_prior_policy": True})
         if attack_parallelism is not None:

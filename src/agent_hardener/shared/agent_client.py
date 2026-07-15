@@ -23,12 +23,27 @@ If the agent returns a different schema, adapt using the --agent-schema-map opti
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
 from agent_hardener.shared.schemas import AgentTrajectory, MCPToolDefinition, ToolCall
 from agent_hardener.shared.settings import Settings
+
+
+@runtime_checkable
+class AgentClientProtocol(Protocol):
+    """Structural type shared by the HTTP AgentClient and policy-enforcing wrappers.
+
+    Any object exposing this surface (run a prompt, receive tool context, close)
+    can drive the attack/hardening loops, so wrappers need not subclass AgentClient.
+    """
+
+    def run_task(self, prompt: str) -> AgentTrajectory: ...
+
+    def set_tool_context(self, tool: MCPToolDefinition) -> None: ...
+
+    def close(self) -> None: ...
 
 
 class AgentClient:
@@ -47,13 +62,30 @@ class AgentClient:
 
         self._client = httpx.Client(headers=headers, timeout=self._timeout)
         self._recorded_exchanges: list[dict[str, Any]] = []
+        # Tool context (description + kb_context) forwarded to LLM-backed agents
+        # so Stage-2 documentation edits have a causal path to agent behaviour.
+        # Keyword-routing agents simply ignore the extra field.
+        self._tool_system_prompt: str = ""
 
     # ── public API ────────────────────────────────────────────────────────────
+
+    def set_tool_context(self, tool: "MCPToolDefinition") -> None:
+        """Set the system prompt (tool description + kb_context) sent with each run.
+
+        Call this before attacking a tool, and again each hardening round after
+        edits are applied, so an LLM-backed agent sees the current definition.
+        """
+        parts = [f"Tool under test: {tool.name}", f"Description: {tool.description}"]
+        if tool.kb_context and tool.kb_context.strip():
+            parts.append(f"Knowledge base / usage policy:\n{tool.kb_context.strip()}")
+        self._tool_system_prompt = "\n".join(parts)
 
     def run_task(self, prompt: str) -> AgentTrajectory:
         """Submit an adversarial prompt to the agent and return the full trajectory."""
         self._recorded_exchanges = []
-        payload = {"prompt": prompt}
+        payload: dict[str, Any] = {"prompt": prompt}
+        if self._tool_system_prompt:
+            payload["system_prompt"] = self._tool_system_prompt
 
         raw: dict[str, Any] = {}
         try:

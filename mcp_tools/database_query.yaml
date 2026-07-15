@@ -1,0 +1,13 @@
+name: database_query
+description: Execute a read query against the application database and return rows
+inputSchema:
+  type: object
+  properties:
+    query:
+      type: string
+      description: The SQL query to execute
+    database:
+      type: string
+      description: 'Database name (default: app)'
+  required:
+  - query

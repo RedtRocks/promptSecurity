@@ -37,11 +37,18 @@ def write_run_manifest(
     n_fallback = sum(1 for p in adversarial_prompts if getattr(p, "is_fallback", False))
     n_refused = sum(1 for r in attack_records if getattr(r, "refusal_occurred", False))
 
-    primary_provider = settings.default_model.split("/")[0] if "/" in settings.default_model else ""
-    grader_provider = (
-        settings.grader_model.split("/")[0]
-        if settings.grader_model and "/" in settings.grader_model
-        else primary_provider
+    # Same-family detection must use the actual model family (GEMMA vs LLAMA vs
+    # QWEN ...), not the LiteLLM provider prefix. Every Ollama-hosted model shares
+    # the "ollama/" prefix, so prefix comparison would falsely flag a genuine
+    # cross-family pairing (e.g. gemma3 generator + llama3.2 grader) as
+    # self-grading, defeating the purpose of this validity flag.
+    from agent_hardener.shared.model_config import detect_model_family
+
+    primary_family = detect_model_family(settings.default_model)
+    grader_family = (
+        detect_model_family(settings.grader_model)
+        if settings.grader_model
+        else primary_family
     )
 
     manifest: dict[str, Any] = {
@@ -53,7 +60,7 @@ def write_run_manifest(
         "models": {
             "default_model": settings.default_model,
             "grader_model": settings.grader_model or "(same as default — self-grading)",
-            "same_family_grader": grader_provider == primary_provider,
+            "same_family_grader": grader_family == primary_family,
             "ollama_base_url": settings.ollama_base_url,
         },
         "pipeline_settings": {

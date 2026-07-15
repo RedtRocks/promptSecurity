@@ -7,13 +7,12 @@ Includes model-specific optimizations for Qwen, Gemma, and other open-source mod
 from __future__ import annotations
 
 import os
-import subprocess
-import shutil
+import re
 import warnings
 from typing import Any, Optional
 
 import litellm
-from litellm import Router
+from litellm import Router  # type: ignore[attr-defined]
 import requests
 
 from agent_hardener.shared.model_config import (
@@ -23,7 +22,6 @@ from agent_hardener.shared.model_config import (
     get_model_parameters,
     get_refine_prompt_suffix,
     ModelFamily,
-    ModelParameters,
 )
 from agent_hardener.shared.settings import Settings
 
@@ -175,7 +173,7 @@ class LLMProvider:
 
         # Router handles retries and provider failover automatically
         response = self._router.completion(**kwargs)
-        content = response.choices[0].message.content
+        content = response.choices[0].message.content  # type: ignore[union-attr]
         return content.strip() if content else ""
 
     def chat_json(
@@ -230,7 +228,7 @@ class LLMProvider:
 
         payload: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": _apply_nothink_directive(messages, model),
             "stream": False,
             "think": False,
             "options": {
@@ -248,12 +246,12 @@ class LLMProvider:
         message = data.get("message") or {}
         content = message.get("content") or ""
         if content:
-            return str(content).strip()
+            return _strip_thinking(str(content))
 
         # Some Ollama models may still place text elsewhere; preserve that for debugging.
         thinking = message.get("thinking") or ""
         if thinking and not content:
-            return str(thinking).strip()
+            return _strip_thinking(str(thinking))
 
         return ""
 
@@ -268,7 +266,7 @@ class LLMProvider:
         response_format: Optional[dict[str, Any]] = None,
     ) -> str:
         """Call Ollama's generate endpoint for models that expect prompt-style input."""
-        prompt = _messages_to_prompt(messages)
+        prompt = _messages_to_prompt(_apply_nothink_directive(messages, model))
         payload: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
@@ -288,10 +286,10 @@ class LLMProvider:
         data = response.json()
         content = data.get("response") or ""
         if content:
-            return str(content).strip()
+            return _strip_thinking(str(content))
 
         thinking = data.get("thinking") or ""
-        return str(thinking).strip()
+        return _strip_thinking(str(thinking))
 
     # ── Model-specific parameter accessors ────────────────────────────────────
 
@@ -362,6 +360,47 @@ class LLMProvider:
             ModelFamily enum value.
         """
         return self._primary_family
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>.*", flags=re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove chain-of-thought reasoning that leaks into model output.
+
+    Handles both well-formed ``<think>...</think>`` blocks and an unterminated
+    ``<think>`` (truncated by num_predict) by dropping everything after it.
+    """
+    if not text:
+        return ""
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _THINK_OPEN_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+def _apply_nothink_directive(
+    messages: list[dict[str, str]], model: str
+) -> list[dict[str, str]]:
+    """Inject the qwen ``/no_think`` soft switch so reasoning is suppressed.
+
+    Some Ollama builds do not honor the top-level ``think: false`` flag for
+    Qwen3 models; the chat template does respect a ``/no_think`` marker in the
+    prompt. This appends it to the system message (creating one if absent),
+    without mutating the caller's list.
+    """
+    if "qwen" not in model.lower():
+        return messages
+
+    patched = [dict(m) for m in messages]
+    for m in patched:
+        if m.get("role") == "system":
+            if "/no_think" not in m.get("content", ""):
+                m["content"] = f"{m.get('content', '').rstrip()}\n/no_think"
+            return patched
+
+    # No system message present — prepend a minimal one.
+    return [{"role": "system", "content": "/no_think"}, *patched]
 
 
 def _set_if_nonempty(key: str, value: str) -> None:

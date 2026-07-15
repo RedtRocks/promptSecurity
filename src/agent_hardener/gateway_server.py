@@ -27,7 +27,8 @@ from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Optional, Union
+from collections.abc import AsyncIterator
+from typing import Any, Callable, Optional
 
 from agent_hardener.shared.agent_client import AgentClient
 from agent_hardener.shared.schemas import SAMOSPolicy
@@ -97,7 +98,7 @@ def create_app(
     inner_agent: Any = None,
     audit_log_path: Optional[Path] = None,
     audit_ring_size: int = 500,
-):
+) -> "FastAPI":
     """Build the FastAPI gateway app.
 
     Exactly one of `policy` or `policy_path` must be provided.
@@ -127,7 +128,7 @@ def create_app(
     enforcer = PolicyEnforcingAgentClient(inner_agent, policy)
 
     # ── Audit ring + optional JSONL sink ──────────────────────────────────────
-    audit_ring: deque = deque(maxlen=audit_ring_size)
+    audit_ring: deque[dict[str, Any]] = deque(maxlen=audit_ring_size)
     audit_lock = Lock()
 
     def _record_audit(event: dict[str, Any]) -> None:
@@ -144,7 +145,7 @@ def create_app(
 
     # ── App ───────────────────────────────────────────────────────────────────
     @asynccontextmanager
-    async def _lifespan(_app):
+    async def _lifespan(_app: "FastAPI") -> AsyncIterator[None]:
         try:
             yield
         finally:
@@ -173,7 +174,8 @@ def create_app(
     @app.get("/policy")
     def get_policy() -> dict[str, Any]:
         """Return the policy the gateway is currently enforcing."""
-        return json.loads(policy.model_dump_json())
+        result: dict[str, Any] = json.loads(policy.model_dump_json())
+        return result
 
     @app.get("/audit")
     def get_audit(limit: int = 50) -> dict[str, Any]:

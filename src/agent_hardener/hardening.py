@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING, Union
 
 from rich.console import Console
 from rich.progress import Progress, TextColumn, TimeElapsedColumn
@@ -26,12 +26,11 @@ from agent_hardener.shared.schemas import (
     AttackIntensity,
     AttackIteration,
     AttackRecord,
+    AdversarialPrompt,
     FailureType,
-    EditRecommendation,
     FailureAnalysisReport,
     MCPToolDefinition,
     SAMOSPolicy,
-    ToolCall,
     ToolProfile,
 )
 from agent_hardener.stage1.attacker import generate_attacks
@@ -43,6 +42,14 @@ from agent_hardener.stage2.synthesizer import synthesize
 from agent_hardener.stage3.annotator import annotate
 from agent_hardener.stage3.policy_builder import build_policy
 from agent_hardener.shared.settings import Settings
+
+if TYPE_CHECKING:
+    from agent_hardener.verifier import PolicyEnforcingAgentClient
+
+# The hardening loop may run either the raw agent client or a policy-enforcing
+# wrapper (round N >= 2 when --enforce-prior-policy is set); both duck-type the
+# same run_task / set_tool_context / close surface.
+AnyAgentClient = Union[AgentClient, "PolicyEnforcingAgentClient"]
 
 
 _LEARNED_BLOCK_PHRASES = (
@@ -211,7 +218,7 @@ def run_hardening_pipeline(
         # Round 1 is always unguarded (we have no policy yet).
         if settings.enforce_prior_policy and prior_policy is not None:
             from agent_hardener.verifier import PolicyEnforcingAgentClient
-            effective_agent = PolicyEnforcingAgentClient(inner=agent, policy=prior_policy)
+            effective_agent: AnyAgentClient = PolicyEnforcingAgentClient(inner=agent, policy=prior_policy)
             console.print(
                 f"\n  [dim]Round {round_index}: agent wrapped with policy from round {round_index - 1}.[/]"
             )
@@ -231,6 +238,7 @@ def run_hardening_pipeline(
             enable_signature_memory=settings.enable_signature_memory,
             baseline_attacks=settings.baseline_attacks,
             n_repeats=settings.n_repeats,
+            attack_breadth=settings.attack_breadth,
             console=console,
             err_console=err_console,
         )
@@ -312,6 +320,7 @@ def run_hardening_pipeline(
             policy=final_round["policy"],
             output_dir=output_dir,
             hardening_history=hardening_history,
+            success_threshold=settings.attack_success_threshold,
         )
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
@@ -332,7 +341,7 @@ def _run_round(
     tool: MCPToolDefinition,
     learned_defense: LearnedDefenseMemory,
     llm: LLMProvider,
-    agent: AgentClient,
+    agent: AnyAgentClient,
     max_iterations: int,
     attack_parallelism: int,
     success_threshold: float,
@@ -341,13 +350,19 @@ def _run_round(
     enable_signature_memory: bool,
     baseline_attacks: str = "llm",
     n_repeats: int = 1,
-    console: Console = None,
-    err_console: Console = None,
+    attack_breadth: int = 1,
+    *,
+    console: Console,
+    err_console: Console,
 ) -> dict[str, Any]:
     console.rule(f"[bold cyan]HARDENING ROUND {round_index}[/]")
 
     working_tool = _apply_learning_context(tool, learned_defense)
     attack_intensity = _attack_intensity_for_round(round_index, total_rounds)
+    # Forward the current (edited) tool definition so an LLM-backed agent sees
+    # this round's description + kb_context edits.
+    if hasattr(agent, "set_tool_context"):
+        agent.set_tool_context(working_tool)
 
     with Progress(TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
         t = prog.add_task("Profiling tool...", total=None)
@@ -364,6 +379,7 @@ def _run_round(
             working_tool, profile, llm,
             attack_intensity=attack_intensity,
             baseline_mode=baseline_attacks,
+            breadth=attack_breadth,
         )
         prog.update(
             t,
@@ -384,7 +400,7 @@ def _run_round(
     attack_table.add_column("Iterations", width=10)
     attack_table.add_column("Refusal?", width=10)
 
-    def _run_single_attack(index_and_prompt):
+    def _run_single_attack(index_and_prompt: tuple[int, AdversarialPrompt]) -> AttackRecord:
         i, adv_prompt = index_and_prompt
         blocked, reason = learned_defense.should_block(
             prompt_text=adv_prompt.prompt_text,
@@ -520,7 +536,7 @@ def _run_round(
         prog.stop_task(t)
 
     cov = policy.policy_coverage
-    console.print(f"\n  [bold]Stage 3 complete:[/]")
+    console.print("\n  [bold]Stage 3 complete:[/]")
     console.print(f"    Fully blocked:           [green]{cov.attacks_fully_blocked_by_policy}[/]")
     console.print(f"    Partially mitigated:     [yellow]{cov.attacks_partially_mitigated}[/]")
     console.print(f"    Needs model-level def.:  [cyan]{cov.attacks_requiring_model_level_defense}[/]")

@@ -3,7 +3,13 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"c:\\\\Computer\\\\Coding\\\\capstone\" -Recurse -File)",
       "Bash(Select-Object -Property FullName, Length)",
-      "Bash(Sort-Object FullName)"
+      "Bash(Sort-Object FullName)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m ruff check src/)",
+      "Bash(python -m mypy src/)",
+      "Bash(python -m ruff check src/ --fix)",
+      "Bash(python -m mypy --version)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

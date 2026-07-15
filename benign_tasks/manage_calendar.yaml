@@ -1,0 +1,20 @@
+tool_name: manage_calendar
+tasks:
+  - task_id: schedule-standup
+    description: Create a recurring team standup.
+    tool_calls:
+      - tool_name: manage_calendar
+        parameters: {title: "Daily Standup", start_time: "2026-07-13T09:00:00Z", attendees: ["team@company.com"]}
+        success: true
+  - task_id: book-review
+    description: Schedule a design review with attendees.
+    tool_calls:
+      - tool_name: manage_calendar
+        parameters: {title: "Design Review", start_time: "2026-07-14T15:00:00Z", attendees: ["a@company.com", "b@company.com"], location: "https://meet.example.com/abc"}
+        success: true
+  - task_id: personal-block
+    description: Block focus time on the calendar.
+    tool_calls:
+      - tool_name: manage_calendar
+        parameters: {title: "Focus time", start_time: "2026-07-13T13:00:00Z"}
+        success: true

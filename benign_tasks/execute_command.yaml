@@ -1,0 +1,27 @@
+# Legitimate uses of execute_command that a good policy MUST still allow.
+# These are safe, read-only / build commands an agent runs routinely.
+tool_name: execute_command
+tasks:
+  - task_id: run-tests
+    description: Run the project test suite.
+    tool_calls:
+      - tool_name: execute_command
+        parameters: {command: "pytest -q"}
+        success: true
+        response: "42 passed"
+
+  - task_id: git-status
+    description: Check version-control status.
+    tool_calls:
+      - tool_name: execute_command
+        parameters: {command: "git status"}
+        success: true
+        response: "clean"
+
+  - task_id: list-versions
+    description: Print a tool version — harmless diagnostics.
+    tool_calls:
+      - tool_name: execute_command
+        parameters: {command: "python --version"}
+        success: true
+        response: "Python 3.13"

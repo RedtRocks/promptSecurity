@@ -17,6 +17,7 @@ from agent_hardener.shared.schemas import (
     ConfidentialityAnnotations,
     ConfidentialityLevel,
     DataClassification,
+    DataEndpoint,
     ExploitType,
     FailureAnalysisReport,
     ToolProfile,
@@ -76,9 +77,14 @@ ASSIGNMENT TASK:
    - execution: false, OR a list of specific allowed binary paths only.
    - software_libraries: false, OR a list of required library names only.
 
-   If an attack SUCCESSFULLY exploited a capability, you MUST set it to false or restrict it.
-   For capabilities that were NOT exploited and ARE legitimately needed, list the minimum scope.
-   For capabilities not needed at all, set to false.
+   CRITICAL — do NOT destroy the tool's core function. A capability the tool
+   fundamentally requires (e.g. filesystem for a file reader, network for an
+   emailer) must NOT be set to false, because that disables the tool for every
+   legitimate user too. Restrict it to a minimal allowed-set instead.
+   Defend multi-step exfiltration chains (read private data -> send externally)
+   with SESSION TAINT RULES and targeted ENFORCEMENT RULES, not by disabling the
+   source tool's capability. Set a capability to false ONLY when the tool does
+   not need it at all for its stated purpose.
 
 4. For each annotation, provide a brief justification referencing which attack motivated it.
 
@@ -207,10 +213,39 @@ def annotate(
         capability_restriction_justifications=cap_justifications,
     )
 
+    _guard_core_capabilities(profile, capabilities)
     return confidentiality, capabilities
 
 
-def _format_endpoints(endpoints: list) -> str:
+def _guard_core_capabilities(
+    profile: ToolProfile, capabilities: CapabilityAnnotations
+) -> None:
+    """Prevent a deny-all policy from disabling the tool's core capability.
+
+    If profiling shows the tool genuinely uses a capability (True) but the LLM
+    set it to ``false``, disabling it would block every legitimate use of the
+    tool — a degenerate "turn the tool off" policy that trivially blocks attacks
+    while destroying all utility. We keep the capability enabled (unrestricted
+    ``True`` = allowed) and record that exfiltration defense is delegated to the
+    session taint rules + enforcement rules, which block the *flow* rather than
+    the *tool*. Capabilities the tool does not use are left denied.
+    """
+    core = {
+        "network": profile.capabilities.network,
+        "filesystem": profile.capabilities.filesystem,
+        "environment": profile.capabilities.environment,
+        "execution": profile.capabilities.execution,
+    }
+    for cap, is_used in core.items():
+        if is_used and getattr(capabilities, cap) is False:
+            setattr(capabilities, cap, True)
+            capabilities.capability_restriction_justifications[cap] = (
+                "Kept enabled: disabling would break the tool's core function. "
+                "Exfiltration is instead blocked by session taint + enforcement rules."
+            )
+
+
+def _format_endpoints(endpoints: list[DataEndpoint]) -> str:
     if not endpoints:
         return "  (none)"
     return "\n".join(
@@ -243,6 +278,8 @@ def _conservative_defaults(profile: ToolProfile) -> tuple[ConfidentialityAnnotat
             for cap in ["network", "filesystem", "environment", "execution", "software_libraries"]
         },
     )
+    # Even the failsafe must not disable the tool's core capability wholesale.
+    _guard_core_capabilities(profile, capabilities)
     return confidentiality, capabilities
 
 

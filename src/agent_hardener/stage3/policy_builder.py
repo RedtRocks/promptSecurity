@@ -9,6 +9,7 @@ Builds the complete SAMOS policy:
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from typing import Any
 
@@ -32,6 +33,7 @@ from agent_hardener.shared.schemas import (
     ToolAnnotation,
 )
 from agent_hardener.stage3.deployment import build_deployment_spec
+from agent_hardener.verifier.replay import trigger_has_argument_predicate
 
 _TAINT_SYSTEM = textwrap.dedent("""\
 You are a SAMOS information flow control policy engineer.
@@ -299,6 +301,54 @@ def _normalize_attack_chain(value: Any) -> list[str]:
     return []
 
 
+def _guard_core_tool_blocks(
+    rules: list[EnforcementRule], tool_name: str
+) -> list[EnforcementRule]:
+    """Prevent degenerate deny-all policies from the enforcement-rule lever.
+
+    The offline verifier matches an ``EnforcementRule.trigger_condition`` by tool
+    name, then checks the rule's *argument-level* conditions against the call's
+    parameters (see ``verifier/replay.py``). A rule that discriminates on an
+    argument literal (e.g. ``command CONTAINS 'curl | sh'``) fires only on matching
+    calls, so it is safe to keep as ``BLOCK`` — it will not touch legitimate use.
+
+    The degenerate case is a ``BLOCK`` whose trigger names the core tool but has
+    **no** argument predicate: under the name-only fallback it fires on *every*
+    invocation, including all benign use, collapsing benign-pass-rate to 0 and the
+    security/utility F1 to 0. Mirroring ``_guard_core_capabilities`` at the
+    enforcement layer and the SAMOS "block the flow, not the tool" principle, only
+    such unconditional core-tool blocks are downgraded to ``REQUIRE_CONFIRMATION``;
+    genuine exfiltration is still caught by session-taint rules and by
+    argument-conditional / sink-keyed rules, which the downgrade leaves intact.
+    """
+    pattern = re.compile(rf"\b{re.escape(tool_name)}\b")
+    guarded: list[EnforcementRule] = []
+    for rule in rules:
+        is_unconditional_core_block = (
+            rule.action == EnforcementAction.BLOCK
+            and pattern.search(rule.trigger_condition or "")
+            and not trigger_has_argument_predicate(rule.trigger_condition or "", {tool_name})
+        )
+        if is_unconditional_core_block:
+            note = (
+                " [auto-downgraded from BLOCK: an unconditional BLOCK keyed on the "
+                f"core tool '{tool_name}' would deny all legitimate use under "
+                "name-only trigger matching; exfiltration is instead handled by "
+                "session taint and argument-conditional / sink-keyed rules.]"
+            )
+            guarded.append(
+                rule.model_copy(
+                    update={
+                        "action": EnforcementAction.REQUIRE_CONFIRMATION,
+                        "reason": (rule.reason or "").strip() + note,
+                    }
+                )
+            )
+        else:
+            guarded.append(rule)
+    return guarded
+
+
 def _build_enforcement_rules(
     tool_name: str,
     confidentiality: ConfidentialityAnnotations,
@@ -364,6 +414,7 @@ def _build_enforcement_rules(
                 )
             )
 
+    rules = _guard_core_tool_blocks(rules, tool_name)
     if rules:
         return rules
 

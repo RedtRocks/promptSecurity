@@ -1,0 +1,20 @@
+tool_name: database_query
+tasks:
+  - task_id: count-active-users
+    description: Aggregate query for a dashboard.
+    tool_calls:
+      - tool_name: database_query
+        parameters: {query: "SELECT COUNT(*) FROM users WHERE active = true"}
+        success: true
+  - task_id: recent-orders
+    description: Read recent orders for reporting.
+    tool_calls:
+      - tool_name: database_query
+        parameters: {query: "SELECT id, total FROM orders ORDER BY created_at DESC LIMIT 20"}
+        success: true
+  - task_id: lookup-product
+    description: Look up a single product by id.
+    tool_calls:
+      - tool_name: database_query
+        parameters: {query: "SELECT name, price FROM products WHERE id = 42"}
+        success: true

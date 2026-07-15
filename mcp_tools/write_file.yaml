@@ -1,0 +1,17 @@
+name: write_file
+description: Write text content to a file on the filesystem, creating or overwriting it
+inputSchema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Destination file path
+    content:
+      type: string
+      description: Text content to write
+    append:
+      type: boolean
+      description: Append instead of overwrite
+  required:
+  - path
+  - content

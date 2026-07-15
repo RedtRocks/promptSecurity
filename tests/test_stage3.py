@@ -22,6 +22,7 @@ from agent_hardener.shared.schemas import (
     EditAction,
     EditRecommendation,
     EnforcementAction,
+    EnforcementRule,
     ExploitType,
     FailureAnalysisReport,
     FailureType,
@@ -158,8 +159,12 @@ class TestAnnotator:
 
         assert confidentiality.read_confidentiality == ConfidentialityLevel.HIGH
         assert confidentiality.write_confidentiality == ConfidentialityLevel.HIGH
-        assert capabilities.network is False
-        assert capabilities.filesystem is False
+        # Core capabilities the tool actually uses (profile network=True,
+        # filesystem=True) must NOT be disabled — that would be a degenerate
+        # deny-all policy. The guard keeps them enabled; exfiltration is blocked
+        # by taint/enforcement rules instead.
+        assert capabilities.network is True
+        assert capabilities.filesystem is True
         assert capabilities.environment == ["SMTP_PASSWORD"]
         assert capabilities.software_libraries == ["smtplib"]
 
@@ -176,9 +181,12 @@ class TestAnnotator:
         confidentiality, capabilities = annotate(profile, analysis, records, llm)
         # Conservative fallback: private data sources → HIGH read
         assert confidentiality.read_confidentiality == ConfidentialityLevel.HIGH
-        # All capabilities blocked conservatively
-        assert capabilities.network is False
-        assert capabilities.filesystem is False
+        # Even the failsafe keeps the tool's core capabilities (profile marks
+        # network + filesystem used) rather than disabling the tool wholesale.
+        assert capabilities.network is True
+        assert capabilities.filesystem is True
+        # Unused capabilities stay denied.
+        assert capabilities.execution is False
 
     def test_annotate_normalizes_non_string_justifications(self):
         from agent_hardener.stage3.annotator import annotate
@@ -468,3 +476,80 @@ class TestPolicyBuilder:
         rule = policy.session_taint_rules.taint_propagation_rules[0]
 
         assert rule.motivated_by_attack_chain == ["read_file", "send_email"]
+
+
+class TestGuardCoreToolBlocks:
+    """Regression: a BLOCK enforcement rule keyed on the core tool must be
+    downgraded so it cannot produce a degenerate deny-all policy (BPR=0, F1=0)."""
+
+    def _guard(self):
+        from agent_hardener.stage3.policy_builder import _guard_core_tool_blocks
+        return _guard_core_tool_blocks
+
+    def test_unconditional_block_on_core_tool_is_downgraded(self):
+        guard = self._guard()
+        # Only a tool-name literal, no argument predicate: under name-only
+        # matching this fires on EVERY read_file call (deny-all) -> downgrade.
+        rule = EnforcementRule(
+            rule_id="ENF-1",
+            trigger_condition="tool_call == 'read_file'",
+            action=EnforcementAction.BLOCK,
+            reason="block reads",
+            motivated_by_attack="ATK-1",
+        )
+        out = guard([rule], "read_file")
+        assert out[0].action == EnforcementAction.REQUIRE_CONFIRMATION
+        assert "auto-downgraded" in out[0].reason
+
+    def test_argument_conditional_block_on_core_tool_is_kept(self):
+        guard = self._guard()
+        # Discriminates on an argument literal, so it fires only on matching
+        # calls (not benign use) -> safe to keep as BLOCK.
+        rule = EnforcementRule(
+            rule_id="ENF-1b",
+            trigger_condition="tool_call == 'read_file' AND path.contains('/etc/shadow')",
+            action=EnforcementAction.BLOCK,
+            reason="block sensitive path",
+            motivated_by_attack="ATK-1b",
+        )
+        out = guard([rule], "read_file")
+        assert out[0].action == EnforcementAction.BLOCK
+
+    def test_block_on_sink_tool_is_preserved(self):
+        guard = self._guard()
+        # A BLOCK keyed on a different (sink) tool must stay BLOCK: it does not
+        # block the core tool's legitimate use, so it is not degenerate.
+        rule = EnforcementRule(
+            rule_id="ENF-2",
+            trigger_condition="tool == 'send_email' AND session.taint == 'high'",
+            action=EnforcementAction.BLOCK,
+            reason="block exfil sink",
+            motivated_by_attack="ATK-2",
+        )
+        out = guard([rule], "read_file")
+        assert out[0].action == EnforcementAction.BLOCK
+
+    def test_non_block_actions_untouched(self):
+        guard = self._guard()
+        rule = EnforcementRule(
+            rule_id="ENF-3",
+            trigger_condition="tool_call == 'read_file'",
+            action=EnforcementAction.AUDIT,
+            reason="audit",
+            motivated_by_attack="ATK-3",
+        )
+        out = guard([rule], "read_file")
+        assert out[0].action == EnforcementAction.AUDIT
+
+    def test_substring_tool_name_not_falsely_matched(self):
+        guard = self._guard()
+        # "read" must not match "read_file" via substring; word-boundary only.
+        rule = EnforcementRule(
+            rule_id="ENF-4",
+            trigger_condition="tool_call == 'read_file_metadata'",
+            action=EnforcementAction.BLOCK,
+            reason="r",
+            motivated_by_attack="ATK-4",
+        )
+        out = guard([rule], "read")
+        assert out[0].action == EnforcementAction.BLOCK

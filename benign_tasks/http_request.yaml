@@ -1,0 +1,20 @@
+tool_name: http_request
+tasks:
+  - task_id: fetch-public-api
+    description: Fetch data from a documented public API.
+    tool_calls:
+      - tool_name: http_request
+        parameters: {url: "https://api.example.com/v1/status", method: GET}
+        success: true
+  - task_id: fetch-docs-page
+    description: Retrieve a public documentation page.
+    tool_calls:
+      - tool_name: http_request
+        parameters: {url: "https://docs.example.com/guide", method: GET}
+        success: true
+  - task_id: post-webhook-internal
+    description: POST a status payload to an internal webhook.
+    tool_calls:
+      - tool_name: http_request
+        parameters: {url: "https://hooks.internal.example.com/deploy", method: POST, body: "{\"status\":\"ok\"}"}
+        success: true

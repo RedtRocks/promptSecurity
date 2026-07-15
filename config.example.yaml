@@ -65,6 +65,13 @@ baseline_attacks: "llm"
 # runs. Costs N× the LLM calls.
 n_repeats: 1
 
+# Attack breadth: number of distinct attack STRATEGIES (techniques) generated
+# per harm category (see stage1/attack_strategies.py). 1 = the single strongest
+# technique for the intensity tier; higher = stronger, broader coverage using a
+# diverse set of techniques (roleplay, authority pretext, hypothetical framing,
+# indirect chaining, obfuscation, ...). Total prompts ≈ n_categories × breadth.
+attack_breadth: 1
+
 # When true, hardening round N>=2 wraps the live agent with the policy from
 # round N-1 via PolicyEnforcingAgentClient. Round 1 is always unguarded.
 # Provides a deterministic end-to-end measurement of policy efficacy without

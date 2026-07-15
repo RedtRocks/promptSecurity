@@ -1,0 +1,20 @@
+tool_name: post_message
+tasks:
+  - task_id: team-standup
+    description: Post a standup note to the team channel.
+    tool_calls:
+      - tool_name: post_message
+        parameters: {channel: "#team-eng", text: "Standup at 9am.", visibility: private}
+        success: true
+  - task_id: deploy-notice
+    description: Notify a channel of a successful deploy.
+    tool_calls:
+      - tool_name: post_message
+        parameters: {channel: "#deploys", text: "v1.2 shipped to staging.", visibility: private}
+        success: true
+  - task_id: dm-colleague
+    description: Send a direct message to a colleague.
+    tool_calls:
+      - tool_name: post_message
+        parameters: {channel: "@teammate", text: "Can you review my PR?", visibility: direct}
+        success: true

@@ -18,10 +18,11 @@ Use it by passing it where `AgentClient` is expected. The interface is identical
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from agent_hardener.shared.schemas import (
     AgentTrajectory,
+    MCPToolDefinition,
     SAMOSPolicy,
     TaintLevel,
     ToolCall,
@@ -31,6 +32,7 @@ from agent_hardener.verifier.capabilities import (
     infer_capability,
 )
 from agent_hardener.verifier.replay import (
+    _argument_conditions_satisfied,
     _index_rules_by_tool_name,
     _tool_reads_high_confidentiality,
     _tool_writes_low_confidentiality,
@@ -56,11 +58,17 @@ class PolicyEnforcingAgentClient:
         self._policy = policy
         self._rule_index = _index_rules_by_tool_name(policy)
         # Track per-prompt enforcement actions so the report can show what fired.
-        self.last_enforcement_log: list[dict] = []
+        self.last_enforcement_log: list[dict[str, Any]] = []
 
     def run_task(self, prompt: str) -> AgentTrajectory:
         trajectory = self._inner.run_task(prompt)
         return self._enforce(trajectory)
+
+    def set_tool_context(self, tool: MCPToolDefinition) -> None:
+        """Forward tool context to the wrapped agent (LLM agents use it)."""
+        setter = getattr(self._inner, "set_tool_context", None)
+        if callable(setter):
+            setter(tool)
 
     def close(self) -> None:
         self._inner.close()
@@ -68,7 +76,7 @@ class PolicyEnforcingAgentClient:
     def __enter__(self) -> "PolicyEnforcingAgentClient":
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     # ── enforcement ──────────────────────────────────────────────────────────
@@ -84,6 +92,11 @@ class PolicyEnforcingAgentClient:
         taint_monotonic = self._policy.gateway_enforcement.taint_is_monotonic
         blocked = False
         block_reason = ""
+        # Real tool identifiers in play, so argument-value literals are told apart
+        # from tool-identity literals (mirrors the offline verifier).
+        known_tool_names = {self._policy.tool_name} | {
+            c.tool_name for c in trajectory.tool_calls
+        }
 
         for step_idx, call in enumerate(trajectory.tool_calls):
             if blocked:
@@ -135,7 +148,9 @@ class PolicyEnforcingAgentClient:
             # Gate 3 — enforcement rules referencing this tool
             matched = self._rule_index.get(call.tool_name, [])
             block_rule_id = None
-            for rule_id, action in matched:
+            for rule_id, action, trigger in matched:
+                if not _argument_conditions_satisfied(trigger, call, known_tool_names):
+                    continue
                 if action == EnforcementAction.BLOCK:
                     block_rule_id = rule_id
                     break

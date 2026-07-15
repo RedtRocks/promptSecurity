@@ -1,0 +1,20 @@
+name: http_request
+description: Make an outbound HTTP request to a URL and return the response body
+inputSchema:
+  type: object
+  properties:
+    url:
+      type: string
+      description: The full URL to request
+    method:
+      type: string
+      description: 'HTTP method (default: GET)'
+      enum: [GET, POST, PUT, DELETE]
+    headers:
+      type: object
+      description: Optional request headers
+    body:
+      type: string
+      description: Optional request body for POST/PUT
+  required:
+  - url

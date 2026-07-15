@@ -1,0 +1,20 @@
+tool_name: write_file
+tasks:
+  - task_id: save-report
+    description: Save a generated report into the workspace.
+    tool_calls:
+      - tool_name: write_file
+        parameters: {path: /workspace/reports/summary.md, content: "# Summary\nAll good."}
+        success: true
+  - task_id: update-config
+    description: Update a project config file.
+    tool_calls:
+      - tool_name: write_file
+        parameters: {path: /workspace/config.json, content: "{\"debug\": false}"}
+        success: true
+  - task_id: append-log
+    description: Append a line to a workspace log.
+    tool_calls:
+      - tool_name: write_file
+        parameters: {path: /workspace/logs/run.log, content: "done", append: true}
+        success: true

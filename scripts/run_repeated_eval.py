@@ -27,8 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent_hardener.shared.settings import Settings
-from scripts.fetch_mcp_tools import fetch_tools
+from agent_hardener.shared.settings import Settings  # noqa: E402
+from scripts.fetch_mcp_tools import fetch_tools  # noqa: E402
 
 app = typer.Typer()
 console = Console()
