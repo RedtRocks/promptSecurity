@@ -125,11 +125,37 @@ class TestBaselineAttacks:
         from agent_hardener.shared.schemas import ToolProfile
         profile = ToolProfile(tool_name="read_file", semantic_domain="filesystem")
 
-        attacks = generate_attacks(tool, profile, llm, baseline_mode="template")
+        attacks = generate_attacks(
+            tool, profile, llm, baseline_mode="template", taxonomy="harm"
+        )
         assert len(attacks) == len(HarmCategory)
         assert all(a.is_fallback for a in attacks)
         llm.chat_json.assert_not_called()
         llm.chat.assert_not_called()
+
+    def test_template_mode_misuse_taxonomy_skips_llm(self):
+        """The template baseline must also work on the tool-misuse axis."""
+        from agent_hardener.shared.schemas import ToolMisuseCategory, ToolProfile
+
+        tool = MCPToolDefinition(name="read_file", description="reads files")
+        llm = MagicMock()
+        profile = ToolProfile(tool_name="read_file", semantic_domain="filesystem")
+
+        attacks = generate_attacks(tool, profile, llm, baseline_mode="template")
+        assert len(attacks) == len(ToolMisuseCategory)
+        assert all(a.is_fallback for a in attacks)
+        llm.chat_json.assert_not_called()
+        llm.chat.assert_not_called()
+
+        # The injection objective's template must carry a payload, otherwise it
+        # would silently test the direct channel under an injection label.
+        injection = [
+            a for a in attacks
+            if a.misuse_category == ToolMisuseCategory.INJECTION_HIJACK
+        ]
+        assert len(injection) == 1
+        assert injection[0].injections
+        assert injection[0].injections[0].content.strip()
 
     def test_unknown_baseline_raises(self):
         tool = MCPToolDefinition(name="read_file", description="")

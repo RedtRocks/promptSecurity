@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,7 +47,12 @@ class Settings(BaseSettings):
     # paper baseline that quantifies what the LLM attacker adds over deterministic
     # templates.
     baseline_attacks: str = Field("llm")  # "llm" | "template"
-    # Number of distinct attack strategies (techniques) generated per harm
+    # Attack objective taxonomy. "misuse" (default) drives generation from
+    # ToolMisuseCategory — objectives a tool can actually be abused for, each
+    # mapping to an enforceable policy gate. "harm" uses the legacy AgentHarm
+    # content-harm categories, kept for comparability with prior benchmarks.
+    attack_taxonomy: str = Field("misuse")  # "misuse" | "harm"
+    # Number of distinct attack strategies (techniques) generated per
     # category. >1 produces broader, stronger coverage at ~breadth× the cost.
     attack_breadth: int = Field(1, ge=1, le=8)
     # Seed sweeps: number of independent repeats per attack cycle. >1 populates
@@ -63,6 +69,12 @@ class Settings(BaseSettings):
     # is NOT a measurement of the generated SAMOS policy. Default off so the
     # reported "agent_run_success_rate" reflects only LLM-driven hardening.
     enable_signature_memory: bool = Field(False)
+
+    # Benign-task suites for the security/utility (BPR) measurement. None uses the
+    # default search path (./benign_tasks, then the repo root). Point this at
+    # `benign_tasks_recorded/` to score utility against trajectories captured from
+    # a live agent instead of hand-authored ones.
+    benign_dir: Optional[Path] = Field(None)
 
     # Output
     output_dir: Path = Field(Path("./hardener_output"))

@@ -48,6 +48,25 @@ python scripts/aggregate_runs.py hardener_output/runA hardener_output/runB --out
 # Inter-rater agreement between two graders (e.g., human vs. LLM, or grader-A vs. grader-B)
 python scripts/cohen_kappa.py labels.csv --col-a llm_grader --col-b human_grader --bootstrap 1000
 
+# Legacy AgentHarm content-harm taxonomy (comparability runs only, NOT headline numbers)
+agent-hardener analyze --tool-file mcp_tools/read_file.yaml --config config.yaml --attack-taxonomy harm
+
+# Tool-poisoning detection: recall / FPR / precision over poisoned vs. matched clean tools
+python scripts/tool_poisoning_eval.py --config config.yaml --repeats 3 --out poisoning_eval.json
+
+# Re-record benign trajectories from the live agent (removes hand-authored circularity)
+python scripts/record_benign_trajectories.py --all --config config.yaml --out-dir benign_tasks_recorded
+agent-hardener analyze --tool-file mcp_tools/read_file.yaml --config config.yaml \
+  --benign-dir benign_tasks_recorded
+
+# Compare the policy against prompt-level defenses (spotlighting, instruction defense, ...)
+python scripts/defense_baseline_eval.py --tool-file mcp_tools/read_file.yaml \
+  --config config.yaml --policy hardener_output/read_file/report.json --out defense_baselines.json
+
+# Launch the evaluation agent (ReAct loop; AGENT_MAX_STEPS bounds the step budget)
+OLLAMA_BASE_URL=... AGENT_LLM_MODEL=ollama/gemma3:27b AGENT_MAX_STEPS=6 \
+  python -m uvicorn scripts.llm_agent_server:app --port 8080
+
 # Lint / type-check
 ruff check src/
 mypy src/
@@ -108,9 +127,52 @@ Sends adversarial prompts to the live agent endpoint. Accepts responses in MCP-c
 
 Tool YAML files follow MCP `inputSchema` conventions. The pipeline reads `name`, `description`, `inputSchema.properties`, and optionally `kb_context` (knowledge base / system prompt) and `target_agent_endpoint`.
 
-### Stage 1 harm categories
+### Stage 1 attack objectives (two taxonomies)
 
-Eight categories from the AgentHarm taxonomy: `disinformation`, `harassment`, `fraud`, `cybercrime`, `copyright`, `hate_speech`, `drugs`, `sexual_content`. One `AdversarialPrompt` is generated per category and refined iteratively (`refiner.py`) using a Red-Agent-Reflect loop.
+**Default: `ToolMisuseCategory`** (`--attack-taxonomy misuse`) — six objectives a
+*tool* can actually be abused for, each mapping to a gate the verifier enforces:
+`data_exfiltration`, `destructive_action`, `unauthorized_communication`,
+`capability_escalation`, `persistence_tampering`, `injection_hijack`. Each is mapped
+to an OWASP LLM Top 10 entry (`MISUSE_TO_OWASP_LLM`) and to its closest AgentHarm
+category (`MISUSE_TO_HARM`) so existing reports/aggregators keep working.
+
+**Legacy: `HarmCategory`** (`--attack-taxonomy harm`) — the eight AgentHarm
+content-harm categories. Retained only for comparability with AgentHarm-based work.
+Do not use for headline numbers: "use `read_file` to produce hate speech" is
+semantically incoherent, fails for reasons unrelated to the tool's security, and
+produced much of the per-tool variance in `docs/RESULTS_corpus_v1.md`.
+
+One `AdversarialPrompt` per (category × strategy) is generated and refined
+iteratively (`refiner.py`) via a Red-Agent-Reflect loop.
+
+### Delivery channels: direct vs. indirect prompt injection
+
+`injection_hijack` is defined by its *channel*, not its goal. Its attacks carry an
+`InjectedContent` payload planted in a tool **result**, with a benign user turn —
+indirect prompt injection. Injection techniques (`injected_instruction`,
+`injected_authority`) live on a separate axis in `attack_strategies.py` and are
+**never** returned by `strategies_for()`: refusal escalation must not silently
+change the channel under test. Every `AttackRecord` carries `delivery_channel` and
+`ingested_untrusted_content`, so direct and indirect results are never pooled.
+
+The evaluation agent (`scripts/llm_agent_server.py`) runs a **bounded ReAct loop**
+(plan → act → observe → re-plan). This is a prerequisite, not a nicety: the previous
+single-shot planner committed to its entire plan before seeing any tool output, so
+indirect injection was unrepresentable. Termination: refusal, `done`, a step
+proposing no new work (repeat detection), or the step budget (`AGENT_MAX_STEPS`,
+default 6). Repeat detection is also what keeps single-shot planners behaving
+exactly as before.
+
+### Tool poisoning (the description as attack surface)
+
+For a third-party MCP server the tool `description` is attacker-supplied but read by
+the agent as trusted text (OWASP `MCP03:2025`). `profiler.py` therefore reports
+`injected_instructions` + `poisoning_suspected` on every `ToolProfile`; the flag is
+derived from the evidence (spans OR the boolean), since models often set one and not
+the other. `mcp_tools/poisoned/` holds seven poisoned variants across seven payload
+families, each paired with its **matched clean control** — without the control, a
+flag-everything detector would score perfect recall. Run
+`scripts/tool_poisoning_eval.py` for recall / FPR / precision / per-family recall.
 
 ### Stage 3 policy model (SAMOS)
 
@@ -167,7 +229,7 @@ This is a **capstone project** that is also being written up as a research paper
 
 **Not yet fixed (need code work before paper):**
 
-16. **Threat model framing.** The pipeline edits `kb_context` (now with a causal path to the LLM agent) and emits a policy (now enforceable via the gateway), but never modifies the tool's *implementation*. "Description-derived attack-surface analysis + runtime policy synthesis" is the honest framing.
+16. **Threat model framing — retargeted (was the biggest validity problem).** The old battery delivered AgentHarm *content-harm* goals through the *user turn*, i.e. a malicious-user threat model that a per-tool information-flow policy does not address; it also produced incoherent attacks ("use `read_file` for hate speech") that failed for reasons unrelated to security, contributing much of the variance in `docs/RESULTS_corpus_v1.md`. Now: `ToolMisuseCategory` objectives, an indirect-injection channel with an agent that can actually be hijacked (ReAct loop), an integrity gate (IFC-002) that is the dual of the existing confidentiality gate, and tool-poisoning detection on the description itself. The pipeline still never modifies the tool's *implementation* — "description-derived attack-surface analysis + runtime policy synthesis" remains the honest framing. **Out of scope and must be stated:** cross-server tool shadowing, rug pulls, MCP authorization/confused-deputy issues.
 
 17. **Corpus (partially grown).** `mcp_tools/` now has 10 diverse tools (file read/write, exec, list, email, http, db query, web search, post message, calendar) each with a `benign_tasks/` suite; the LLM agent server auto-loads all of them so adding a YAML needs no server edit (a test enforces every corpus tool has a benign suite). **Still required:** pull ≥20 from the public MCP registry for a stronger generalization claim.
 
@@ -179,7 +241,7 @@ Attacks are no longer one generic prompt per harm category. Each attack is built
 
 18. **Grader still needs human calibration.** Cross-family grading + the coding manual are in place, but no human labels exist yet. Collect them and report κ before the paper.
 
-19. **CUDA showcase is off-path.** `cuda_showcase/` accelerates post-hoc report aggregation. Drop from the security paper or write a separate, narrow HPC paper.
+19. **CUDA showcase — removed.** `cuda_showcase/` was off-path for a security paper (it accelerated post-hoc report aggregation) and has been deleted, along with its references in `README.md` and `RUN_PROJECT_INSTRUCTIONS.md`. If the GPU work is worth publishing, it belongs in a separate, narrow HPC paper.
 
 
 ### SAMOS policy verifier (`agent_hardener/verifier/`)
@@ -189,7 +251,8 @@ The policy verifier replays each `AttackRecord`'s final trajectory through a par
 How it works:
 1. For each attack record, walk the last iteration's `tool_calls` in order.
 2. **Gate 1 — capability**: infer the SAMOS capability (`network` / `filesystem` / `environment` / `execution`) from the tool name (heuristic in `verifier/capabilities.py`). If `policy.capability_annotations.<capability> is False`, the call is BLOCKED.
-3. **Gate 2 — taint**: maintain a session taint level starting at `policy.session_taint_rules.initial_session_taint`. Reads of high-confidentiality data (the policy's target tool when `read_confidentiality == HIGH`, or any annotated tool) upgrade the session to HIGH (monotonic). Writes to a low-confidentiality sink under HIGH taint trigger `IFC-001-HIGH-TO-LOW` and the call is BLOCKED.
+3. **Gate 2 — confidentiality taint**: maintain a session taint level starting at `policy.session_taint_rules.initial_session_taint`. Reads of high-confidentiality data (the policy's target tool when `read_confidentiality == HIGH`, or any annotated tool) upgrade the session to HIGH (monotonic). Writes to a low-confidentiality sink under HIGH taint trigger `IFC-001-HIGH-TO-LOW` and the call is BLOCKED. Stops private data flowing **out**.
+3b. **Gate 2b — integrity taint (the dual)**: once a call's response has carried attacker-controlled content (`ToolCall.untrusted_content`), a subsequent write to a low-confidentiality sink triggers `IFC-002-UNTRUSTED-TO-ACTION` and is BLOCKED. Stops attacker instructions flowing **in** and being acted on — i.e. an indirect injection being carried out. Declared by the policy via `session_taint_rules.untrusted_input_taints_session` (default True) rather than hardcoded, so the gate enforces a policy statement, not a belief baked into the verifier. Like Gate 2 it tests taint from *prior* calls only, so no tool can block itself on first use. **Benign trajectories never carry untrusted content, so this gate cannot over-block legitimate use by construction** — it raises ABR at zero BPR cost, which is why it is worth having.
 4. **Gate 3 — enforcement rules**: each `EnforcementRule.trigger_condition` is matched to the current tool by name, then its **argument-level conditions are checked against the call's parameters** (`_argument_conditions_satisfied`); a rule fires only if both match (triggers with no evaluable argument literal fall back to name-only firing). `BLOCK` ends the trajectory; `AUDIT` / `REQUIRE_CONFIRMATION` are recorded but don't stop replay.
 
 Each replay produces a `VerifierVerdict` with `final_status`, `triggered_rule_ids`, `triggered_capability_denials`, `taint_violation`, `first_blocking_step`, `final_taint`, and human-readable `notes`. These verdicts ship in `report.json` under `policy_verifier_verdicts` so reviewers can audit every coverage number.
@@ -218,6 +281,14 @@ To make coverage meaningful, benign trajectories are replayed through the **same
 
 This ships in `report.json` under `security_utility`, is surfaced prominently in the HTML report (Stage 3, with a red degenerate-policy banner), and is aggregated into `scripts/aggregate_runs.py` for cross-run tables. `generate_report(..., success_threshold=...)` must receive the run's threshold so ABR counts the same attacks the run did. Benign suites are optional — a missing suite reports utility as unmeasured (`n_benign_tasks == 0`) rather than erroring.
 
+**Benign-suite provenance matters and is now recorded.** In a hand-authored suite we wrote both the task *and* the exact calls it produces — the same circularity objection that applies to self-grading. `scripts/record_benign_trajectories.py` sends each task's `prompt` (falling back to `description`) to the live agent and records what it actually does, writing a suite marked `provenance: recorded`. The provenance ships in `report.json` as `benign_suite_provenance`; point a run at the recorded suites with `--benign-dir benign_tasks_recorded`. Tasks where the agent made no tool calls are **dropped, not kept** — an empty trajectory replays as "nothing to block" and would inflate BPR with tasks that never exercised the tool.
+
+### Defense baselines (`agent_hardener/defenses.py`)
+
+Comparing the synthesized policy against *no* defense makes any non-trivial result look good. `defenses.py` implements the prompt-level mitigations practitioners actually use — instruction defense, spotlighting/datamarking (Hines et al., arXiv:2403.14720), sandwich, and a prompt-level sink restriction — as system-prompt transforms applied via `AgentClient.set_defense()`, so a condition changes *only* the defense. `scripts/defense_baseline_eval.py` runs the same attack battery and benign suite under every condition plus the enforced policy, reporting ASR / risk reduction / BPR / F1.
+
+Note the expected result honestly: spotlighting reports ASR >50% → <2% in its own paper. If the policy does not beat it on the frontier, the defensible claim is that policy enforcement is **independent of model compliance** (it holds when the model is jailbroken), not that it blocks more.
+
 ### Roadmap to publication
 
 In priority order. Items 1–9 above are addressed in code; the items below are what's still required:
@@ -226,6 +297,11 @@ In priority order. Items 1–9 above are addressed in code; the items below are 
 - [ ] **Independent-grader study.** `scripts/grade_with_human_labels.py` now ships: `emit-template` turns a `report.json` into a blind human-labeling CSV, `merge` computes overall and per-category Cohen's κ (with bootstrap CI) between the human labels and the LLM judge. **Still required:** actually collect human labels on a stratified subset (e.g. 40 trajectories spanning all 8 harm categories and 3 exploit types) and report the κ.
 - [x] **Seed sweeps + cross-run variance tooling.** `run_attack_cycle` takes `seeds: list[int]` (within-cycle sweep → `seed_scores`), and `scripts/aggregate_runs.py --by-tool` groups N independent full runs of each tool into per-tool mean±std of ABR / mitigation_rate / BPR / F1 (the paper's error-bar view). **Still required:** run the corpus ≥5× with a fixed seed and quote the mean±std, not single-run point estimates (see `docs/RESULTS_corpus_v1.md`).
 - [ ] **Baseline modes.** `--baseline template` (skip LLM attack generation), `--baseline no-refine` (skip Stage 1.3) so the marginal contribution of each component is measurable.
+- [x] **Defense baselines built.** `agent_hardener/defenses.py` + `scripts/defense_baseline_eval.py` compare the policy against spotlighting / instruction defense / sandwich / prompt-level sink restriction under identical conditions. **Still required:** actually run it; "policy vs. no policy" is not a result.
+- [x] **Indirect prompt injection covered.** ReAct agent loop, `InjectedContent` payloads planted in tool results, injection strategy family, `delivery_channel` provenance, and the IFC-002 integrity gate. **Still required:** report direct and indirect results separately — never pool them.
+- [x] **Tool-poisoning detection.** `profiler.py` emits `injected_instructions` / `poisoning_suspected`; `mcp_tools/poisoned/` holds 7 payload families with matched clean controls; `scripts/tool_poisoning_eval.py` reports recall/FPR/precision. **Still required:** run it, and frame it against MCPTox (arXiv:2508.14925, 45+ real servers) as a detection proof rather than a benchmark.
+- [x] **Benign-trajectory provenance.** `scripts/record_benign_trajectories.py` records real agent trajectories and marks suites `provenance: recorded`; provenance ships in `report.json`. **Still required:** generate recorded suites for the corpus and re-run the numbers with them.
+- [x] **Related work verified.** `docs/RELATED_WORK.md` now cites CaMeL (arXiv:2503.18813), design-patterns (arXiv:2506.08837), spotlighting (arXiv:2403.14720), OWASP MCP Top 10, MCPTox, MCPGuard/MCPXKIT. **CaMeL is the closest prior art — do not claim to beat it on security;** the delta is "no agent rewrite + automatic per-tool policy + poisoned descriptions in scope".
 - [x] **Benchmark script.** `scripts/benchmark_models.py` measures latency/throughput per model over a fixed prompt battery and writes a CSV. **Still required:** run it and paste results into the "Measured Results" section of `IMPLEMENTATION_SUMMARY.md`.
 - [ ] **Expand corpus.** 20–50 real MCP tools in `mcp_tools/`.
 - [ ] **Related-work table.** Compare against AgentDojo (Debenedetti et al. 2024), AgentHarm (Andriushchenko et al. 2024), InjecAgent, Agent Security Bench, and MCP-specific work.
@@ -251,5 +327,7 @@ In priority order. Items 1–9 above are addressed in code; the items below are 
 | `hardening_rounds` | 3 | Max rounds for `harden` command |
 | `enable_signature_memory` | `False` | Memoized blocklist; off by default for honest metrics |
 | `baseline_attacks` | `"llm"` | `"llm"` or `"template"` — baseline ablation control |
+| `attack_taxonomy` | `"misuse"` | `"misuse"` (tool-capability objectives, incl. indirect injection) or `"harm"` (legacy AgentHarm) |
+| `benign_dir` | `None` | Benign-suite directory for BPR; set to `benign_tasks_recorded` for agent-recorded trajectories |
 | `n_repeats` | 1 | Seed sweeps per attack cycle (>1 enables variance reporting) |
 | `enforce_prior_policy` | `False` | In harden mode, wrap agent with prior round's policy |

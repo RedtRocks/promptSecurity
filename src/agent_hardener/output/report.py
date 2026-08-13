@@ -34,11 +34,15 @@ def generate_report(
     output_dir: Path,
     hardening_history: list[dict[str, Any]] | None = None,
     success_threshold: float = 0.95,
+    benign_dir: Path | None = None,
 ) -> tuple[Path, Path]:
     """Generate the JSON report and HTML dashboard.
 
     success_threshold must match the run's attack_success_threshold so the
     verifier and security/utility metrics count the same attacks as "successful".
+
+    benign_dir optionally points at an alternative benign-suite directory (e.g.
+    trajectories recorded from a live agent rather than hand-authored ones).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -54,7 +58,7 @@ def generate_report(
     # Security/utility tradeoff: replay benign tasks through the SAME gates so a
     # deny-everything policy (100% attack coverage) is exposed by a collapsed
     # benign-pass-rate. Missing benign suite -> utility reported as unmeasured.
-    benign_suite = load_benign_suite(tool.name)
+    benign_suite = load_benign_suite(tool.name, benign_dir)
     security_utility = evaluate_security_utility(
         attack_records, policy, benign_suite, success_threshold
     )
@@ -68,6 +72,12 @@ def generate_report(
         "stage3_policy": json.loads(policy.model_dump_json()),
         "policy_verifier_verdicts": [v.to_dict() for v in verifier_verdicts],
         "security_utility": json.loads(security_utility.model_dump_json()),
+        # Where the benign trajectories came from. Hand-authored suites make the
+        # benign pass rate partly circular (we wrote both the task and its calls),
+        # so the provenance must travel with the number, not be assumed.
+        "benign_suite_provenance": (
+            benign_suite.provenance if benign_suite else "none"
+        ),
         "hardening_history": hardening_history or [],
     }
 

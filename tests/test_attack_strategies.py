@@ -82,7 +82,7 @@ class TestBreadthGeneration:
     def test_breadth_multiplies_prompts_and_labels_strategy(self):
         tool = MCPToolDefinition(name="read_file", description="Read a file.")
         llm = _llm()
-        attacks = generate_attacks(tool, _profile(), llm,
+        attacks = generate_attacks(tool, _profile(), llm, taxonomy="harm",
                                    attack_intensity=AttackIntensity.STRONG, breadth=3)
         # 8 harm categories × 3 strategies.
         assert len(attacks) == 8 * 3
@@ -94,6 +94,60 @@ class TestBreadthGeneration:
 
     def test_breadth_one_still_labels_strategy(self):
         tool = MCPToolDefinition(name="read_file", description="Read a file.")
-        attacks = generate_attacks(tool, _profile(), _llm(), breadth=1)
+        attacks = generate_attacks(tool, _profile(), _llm(), breadth=1, taxonomy="harm")
         assert len(attacks) == 8
         assert all(a.attack_strategy for a in attacks)
+
+    def test_misuse_taxonomy_is_the_default(self):
+        """Default generation runs on the tool-misuse axis, one prompt per category."""
+        from agent_hardener.shared.schemas import ToolMisuseCategory
+
+        tool = MCPToolDefinition(name="read_file", description="Read a file.")
+        attacks = generate_attacks(tool, _profile(), _llm(), breadth=1)
+        assert len(attacks) == len(ToolMisuseCategory)
+        assert {a.misuse_category for a in attacks} == set(ToolMisuseCategory)
+        # The AgentHarm label is still populated for comparability with prior work.
+        assert all(a.harm_category is not None for a in attacks)
+
+
+class TestInjectionDelivery:
+    """Indirect-injection attacks must deliver their payload via a tool result."""
+
+    def test_injection_category_uses_injection_strategy_and_payload(self):
+        from agent_hardener.shared.schemas import ToolMisuseCategory
+
+        tool = MCPToolDefinition(name="read_file", description="Read a file.")
+        attacks = generate_attacks(tool, _profile(), _llm(), breadth=1)
+        injection = [
+            a for a in attacks
+            if a.misuse_category == ToolMisuseCategory.INJECTION_HIJACK
+        ]
+        assert len(injection) == 1
+        atk = injection[0]
+        assert S.is_injection_strategy(atk.attack_strategy)
+        # The mocked LLM returns no `injected_content`, so the deterministic
+        # fallback payload must fill in — an injection attack without a payload
+        # would silently degrade to the direct channel.
+        assert atk.injections and atk.injections[0].content.strip()
+
+    def test_direct_categories_carry_no_payload(self):
+        from agent_hardener.shared.schemas import ToolMisuseCategory
+
+        tool = MCPToolDefinition(name="read_file", description="Read a file.")
+        attacks = generate_attacks(tool, _profile(), _llm(), breadth=1)
+        direct = [
+            a for a in attacks
+            if a.misuse_category != ToolMisuseCategory.INJECTION_HIJACK
+        ]
+        assert direct
+        assert all(not a.injections for a in direct)
+
+    def test_injection_strategies_excluded_from_escalation_ladder(self):
+        """`strategies_for` must never return an injection technique: escalation
+        should not silently change the attack's delivery channel."""
+        for intensity in AttackIntensity:
+            got = S.strategies_for(intensity, breadth=99)
+            assert all(not S.is_injection_strategy(s.key) for s in got)
+        assert all(
+            not S.is_injection_strategy(s.key) for s in S.all_strategies()
+        )

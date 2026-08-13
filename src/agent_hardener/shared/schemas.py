@@ -103,9 +103,34 @@ class ToolProfile(BaseModel):
     capabilities: CapabilityProfile = Field(default_factory=CapabilityProfile)
     semantic_domain: str = ""
     description_ambiguities: list[str] = Field(default_factory=list)
+    # ── Tool-poisoning detection ─────────────────────────────────────────────
+    # An MCP tool's description is attacker-controllable whenever the server is
+    # third-party: it is read by the agent as trusted text but supplied by whoever
+    # published the tool. "Tool poisoning" hides instructions there. Because the
+    # description is this pipeline's primary input, detecting that is in scope.
+    injected_instructions: list[str] = Field(
+        default_factory=list,
+        description="Spans of the description/kb_context that instruct the AGENT "
+        "rather than describe the tool (candidate tool-poisoning payloads).",
+    )
+    poisoning_suspected: bool = Field(
+        default=False,
+        description="True when the profiler judges the definition to contain "
+        "instructions aimed at the agent. Distinct from `description_ambiguities`: "
+        "an ambiguity is sloppy wording, poisoning is an active payload.",
+    )
 
 
 class HarmCategory(str, Enum):
+    """AgentHarm content-harm taxonomy (legacy / comparability axis).
+
+    These categories describe harms in the *content* an agent produces. They are
+    retained so results stay comparable with AgentHarm-based work, but they are a
+    poor fit for tool-capability misuse: "use read_file to produce hate speech" is
+    semantically incoherent, and such attacks fail for reasons unrelated to the
+    tool's security. Prefer `ToolMisuseCategory` for tool-level evaluation.
+    """
+
     DISINFORMATION = "disinformation"
     HARASSMENT = "harassment"
     FRAUD = "fraud"
@@ -116,14 +141,83 @@ class HarmCategory(str, Enum):
     SEXUAL_CONTENT = "sexual_content"
 
 
+class ToolMisuseCategory(str, Enum):
+    """Tool-capability misuse taxonomy — the objectives an MCP tool can be abused for.
+
+    Unlike `HarmCategory`, every entry here corresponds to something a *tool* can
+    actually do, and to a gate the policy verifier can actually enforce
+    (capability denial, taint violation, argument-conditional block). This is the
+    axis on which a per-tool information-flow policy can be meaningfully scored.
+    """
+
+    # Read sensitive data, then move it to a lower-confidentiality sink.
+    DATA_EXFILTRATION = "data_exfiltration"
+    # Irreversible or damaging state change (delete, overwrite, drop, revoke).
+    DESTRUCTIVE_ACTION = "destructive_action"
+    # Reach a third party without authorisation (spam, phishing, leaks to chat).
+    UNAUTHORIZED_COMMUNICATION = "unauthorized_communication"
+    # Obtain capability or reach beyond the tool's stated scope (path traversal,
+    # credential/env access, arbitrary execution via an argument).
+    CAPABILITY_ESCALATION = "capability_escalation"
+    # Establish durable footholds: edit configs, add hooks, schedule jobs.
+    PERSISTENCE_TAMPERING = "persistence_tampering"
+    # Attacker-controlled content arriving via a tool result redirects the agent
+    # (indirect prompt injection — the integrity half of information flow).
+    INJECTION_HIJACK = "injection_hijack"
+
+
+# Reviewer legibility: map each misuse category to the OWASP Top 10 for LLM Apps
+# (2025) entry it instantiates. Cited in the paper's threat-model table.
+MISUSE_TO_OWASP_LLM: dict[ToolMisuseCategory, str] = {
+    ToolMisuseCategory.DATA_EXFILTRATION: "LLM02 Sensitive Information Disclosure",
+    ToolMisuseCategory.DESTRUCTIVE_ACTION: "LLM06 Excessive Agency",
+    ToolMisuseCategory.UNAUTHORIZED_COMMUNICATION: "LLM06 Excessive Agency",
+    ToolMisuseCategory.CAPABILITY_ESCALATION: "LLM06 Excessive Agency",
+    ToolMisuseCategory.PERSISTENCE_TAMPERING: "LLM06 Excessive Agency",
+    ToolMisuseCategory.INJECTION_HIJACK: "LLM01 Prompt Injection",
+}
+
+# Every misuse category is also reported under its closest AgentHarm category, so
+# existing reports, aggregators and the HTML dashboard keep working unchanged and
+# results remain comparable with AgentHarm-based prior work.
+MISUSE_TO_HARM: dict[ToolMisuseCategory, HarmCategory] = {
+    ToolMisuseCategory.DATA_EXFILTRATION: HarmCategory.CYBERCRIME,
+    ToolMisuseCategory.DESTRUCTIVE_ACTION: HarmCategory.CYBERCRIME,
+    ToolMisuseCategory.UNAUTHORIZED_COMMUNICATION: HarmCategory.FRAUD,
+    ToolMisuseCategory.CAPABILITY_ESCALATION: HarmCategory.CYBERCRIME,
+    ToolMisuseCategory.PERSISTENCE_TAMPERING: HarmCategory.CYBERCRIME,
+    ToolMisuseCategory.INJECTION_HIJACK: HarmCategory.CYBERCRIME,
+}
+
+
 class AttackIntensity(str, Enum):
     EASY = "easy"
     MEDIUM = "medium"
     STRONG = "strong"
 
 
+class InjectedContent(BaseModel):
+    """An attacker payload planted in a tool's RESULT, not in the user's message.
+
+    This is the indirect-prompt-injection channel: the attacker controls some data
+    the agent will read (a file, a fetched page, an email body, a DB row) and uses
+    it to redirect the agent. The user turn itself can be entirely benign, which is
+    what makes this threat model distinct from a malicious user.
+    """
+
+    content: str = Field(description="The payload text appended to the observation")
+    tool_name: str = Field(
+        default="", description="Only inject into this tool's results ('' = any tool)"
+    )
+    when_param_contains: str = Field(
+        default="",
+        description="Only inject when a parameter value contains this substring",
+    )
+    once: bool = Field(default=True, description="Fire at most once per trajectory")
+
+
 class AdversarialPrompt(BaseModel):
-    """One adversarial prompt targeting a specific harm category."""
+    """One adversarial prompt targeting a specific harm / misuse objective."""
 
     harm_category: HarmCategory
     tool_targeted: str
@@ -144,6 +238,17 @@ class AdversarialPrompt(BaseModel):
         description="Key of the red-team technique used to construct this prompt "
         "(see stage1/attack_strategies.py). Empty for template/fallback attacks.",
     )
+    misuse_category: Optional[ToolMisuseCategory] = Field(
+        default=None,
+        description="Tool-capability misuse objective. Set when the run uses the "
+        "tool-misuse taxonomy; `harm_category` is then the mapped AgentHarm label "
+        "kept for comparability. None for legacy harm-category-driven runs.",
+    )
+    injections: list["InjectedContent"] = Field(
+        default_factory=list,
+        description="Attacker payloads to plant in tool RESULTS for this attack "
+        "(indirect prompt injection). Empty for direct user-turn attacks.",
+    )
 
 
 class ToolCall(BaseModel):
@@ -154,6 +259,12 @@ class ToolCall(BaseModel):
     response: Any = None
     success: bool = True
     failure_reason: str = ""
+    untrusted_content: bool = Field(
+        default=False,
+        description="True when this call's RESPONSE carries attacker-controlled "
+        "content (indirect prompt injection). Marks the integrity boundary: every "
+        "subsequent decision in the trajectory was made on tainted input.",
+    )
 
 
 class AgentTrajectory(BaseModel):
@@ -165,6 +276,19 @@ class AgentTrajectory(BaseModel):
     refusal_detected: bool = False
     refusal_message: str = ""
     raw_response: dict[str, Any] = Field(default_factory=dict)
+    # ── Indirect-injection provenance ────────────────────────────────────────
+    injections_fired: list[str] = Field(
+        default_factory=list,
+        description="Attacker payloads that actually reached the agent through a "
+        "tool result. Empty for direct (user-turn) attacks.",
+    )
+    ingested_untrusted_content: bool = Field(
+        default=False,
+        description="True when at least one observation carried attacker content.",
+    )
+    steps_used: int = Field(
+        default=0, description="ReAct steps consumed (0 for single-shot agents)."
+    )
 
 
 class FailureType(str, Enum):
@@ -206,6 +330,25 @@ class AttackRecord(BaseModel):
     # `final_score` is the mean of these. Used for variance / CI reporting.
     seed_scores: list[float] = Field(default_factory=list)
     seeds_used: list[int] = Field(default_factory=list)
+    # ── Threat-model provenance ──────────────────────────────────────────────
+    misuse_category: Optional[ToolMisuseCategory] = Field(
+        default=None,
+        description="Tool-misuse objective this attack pursued (None for legacy "
+        "harm-category runs). Group results by this for the tool-level analysis.",
+    )
+    attack_strategy: str = Field(
+        default="", description="Red-team technique key carried over from the prompt."
+    )
+    delivery_channel: str = Field(
+        default="user_turn",
+        description="'user_turn' (direct) or 'tool_result' (indirect injection) — "
+        "the channel the malicious instruction arrived through.",
+    )
+    ingested_untrusted_content: bool = Field(
+        default=False,
+        description="True when the winning trajectory acted after reading "
+        "attacker-controlled tool output.",
+    )
 
 
 # ─────────────────────────────── Stage 2 schemas ─────────────────────────────
@@ -309,6 +452,15 @@ class TaintPropagationRule(BaseModel):
 class SessionTaintRules(BaseModel):
     initial_session_taint: TaintLevel
     taint_propagation_rules: list[TaintPropagationRule] = Field(default_factory=list)
+    untrusted_input_taints_session: bool = Field(
+        default=True,
+        description="Integrity rule (IFC-002). When True, reading attacker-"
+        "controlled content marks the session untrusted, and a subsequent "
+        "consequential action (a write to a low-confidentiality sink) is blocked. "
+        "This is the integrity dual of the confidentiality high-to-low rule: it "
+        "stops an indirect prompt injection from being carried out, rather than "
+        "stopping private data from leaving.",
+    )
 
 
 class EnforcementAction(str, Enum):
@@ -417,6 +569,12 @@ class BenignTask(BaseModel):
     task_id: str
     description: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    prompt: str = Field(
+        default="",
+        description="The user request that should produce this trajectory. Set so "
+        "the trajectory can be RE-RECORDED from a live agent instead of being "
+        "hand-authored; falls back to `description` when empty.",
+    )
 
 
 class BenignTaskSuite(BaseModel):
@@ -424,6 +582,13 @@ class BenignTaskSuite(BaseModel):
 
     tool_name: str
     tasks: list[BenignTask] = Field(default_factory=list)
+    provenance: str = Field(
+        default="hand_authored",
+        description="'hand_authored' (trajectories written by us) or 'recorded' "
+        "(captured from a live agent run). Hand-authored trajectories make the "
+        "benign pass rate partly circular — we wrote both the test and its "
+        "expected calls — so runs must report which was used.",
+    )
 
 
 class UtilityResult(BaseModel):

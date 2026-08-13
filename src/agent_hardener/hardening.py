@@ -15,8 +15,11 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING, Union
 
 from rich.console import Console
+from rich.live import Live
 from rich.progress import Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
+
+from agent_hardener.output.live import AttackMonitor
 
 from agent_hardener.output.report import generate_report
 from agent_hardener.shared.agent_client import AgentClient
@@ -239,6 +242,7 @@ def run_hardening_pipeline(
             baseline_attacks=settings.baseline_attacks,
             n_repeats=settings.n_repeats,
             attack_breadth=settings.attack_breadth,
+            attack_taxonomy=settings.attack_taxonomy,
             console=console,
             err_console=err_console,
         )
@@ -321,6 +325,7 @@ def run_hardening_pipeline(
             output_dir=output_dir,
             hardening_history=hardening_history,
             success_threshold=settings.attack_success_threshold,
+            benign_dir=settings.benign_dir,
         )
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
@@ -351,6 +356,7 @@ def _run_round(
     baseline_attacks: str = "llm",
     n_repeats: int = 1,
     attack_breadth: int = 1,
+    attack_taxonomy: str = "misuse",
     *,
     console: Console,
     err_console: Console,
@@ -380,12 +386,14 @@ def _run_round(
             attack_intensity=attack_intensity,
             baseline_mode=baseline_attacks,
             breadth=attack_breadth,
+            taxonomy=attack_taxonomy,
         )
         prog.update(
             t,
             description=(
                 f"[green]{len(adversarial_prompts)} adversarial prompts generated[/] "
                 f"· tier {attack_intensity.value} · attacker={baseline_attacks}"
+                f" · taxonomy={attack_taxonomy}"
             ),
         )
         prog.stop_task(t)
@@ -399,6 +407,11 @@ def _run_round(
     attack_table.add_column("Success?", width=10)
     attack_table.add_column("Iterations", width=10)
     attack_table.add_column("Refusal?", width=10)
+
+    monitor = AttackMonitor([
+        (p.misuse_category.value if p.misuse_category else p.harm_category.value)
+        for p in adversarial_prompts
+    ])
 
     def _run_single_attack(index_and_prompt: tuple[int, AdversarialPrompt]) -> AttackRecord:
         i, adv_prompt = index_and_prompt
@@ -427,22 +440,28 @@ def _run_round(
             success_threshold=success_threshold,
             record_index=i + 1,
             seeds=seeds_list,
+            on_progress=monitor.handle_event,
         )
 
-    with Progress(TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
-        t = prog.add_task(f"Running {len(adversarial_prompts)} attack cycles in parallel...", total=len(adversarial_prompts))
-        workers = max(1, min(len(adversarial_prompts), attack_parallelism))
+    workers = max(1, min(len(adversarial_prompts), attack_parallelism))
+    console.print(
+        f"  [dim]Running {len(adversarial_prompts)} attack cycles "
+        f"({workers} worker{'s' if workers != 1 else ''}, "
+        f"up to {max_iterations} refinement iterations each)[/]"
+    )
+    with Live(
+        get_renderable=monitor.render,
+        console=console,
+        refresh_per_second=8,
+        transient=True,
+    ):
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(_run_single_attack, (i, p)) for i, p in enumerate(adversarial_prompts)]
             for future in concurrent.futures.as_completed(futures):
                 try:
-                    record = future.result()
-                    attack_records.append(record)
-                    prog.update(t, advance=1, description=f"[dim]Finished {record.harm_category.value}[/]")
+                    attack_records.append(future.result())
                 except Exception as exc:
                     err_console.print(f"[bold red]Error running attack:[/] {exc}")
-                    prog.update(t, advance=1)
-        prog.stop_task(t)
 
     attack_records.sort(key=lambda r: r.record_id)
 

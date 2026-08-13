@@ -16,11 +16,20 @@ from typing import Optional, TYPE_CHECKING
 import typer
 import yaml
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from agent_hardener import __version__
+from agent_hardener.output.live import AttackMonitor
 
 if TYPE_CHECKING:
     from agent_hardener.shared.schemas import (
@@ -53,6 +62,14 @@ err_console = Console(stderr=True)
 
 
 # ── Version callback ──────────────────────────────────────────────────────────
+
+def _objective_label_of(prompt: "AdversarialPrompt") -> str:
+    """Short display label for an attack's objective (misuse axis when present)."""
+    return (
+        prompt.misuse_category.value if prompt.misuse_category
+        else prompt.harm_category.value
+    )
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -107,6 +124,18 @@ def analyze(
         None,
         "--baseline-attacks",
         help="Stage 1 attack source: 'llm' (default) or 'template' (skip LLM, use fallback templates).",
+    ),
+    attack_taxonomy: Optional[str] = typer.Option(
+        None,
+        "--attack-taxonomy",
+        help="Attack objectives: 'misuse' (default, tool-capability misuse incl. "
+        "indirect injection) or 'harm' (legacy AgentHarm content-harm categories).",
+    ),
+    benign_dir: Optional[Path] = typer.Option(
+        None,
+        "--benign-dir",
+        help="Directory of benign-task suites for the utility (BPR) metric. Use "
+        "benign_tasks_recorded/ to score against agent-recorded trajectories.",
     ),
     n_repeats: Optional[int] = typer.Option(
         None,
@@ -191,6 +220,14 @@ def analyze(
             if baseline_attacks not in {"llm", "template"}:
                 raise ValueError(f"--baseline-attacks must be 'llm' or 'template', got {baseline_attacks!r}")
             settings = settings.model_copy(update={"baseline_attacks": baseline_attacks})
+        if attack_taxonomy is not None:
+            if attack_taxonomy not in {"misuse", "harm"}:
+                raise ValueError(
+                    f"--attack-taxonomy must be 'misuse' or 'harm', got {attack_taxonomy!r}"
+                )
+            settings = settings.model_copy(update={"attack_taxonomy": attack_taxonomy})
+        if benign_dir is not None:
+            settings = settings.model_copy(update={"benign_dir": benign_dir})
         if n_repeats is not None:
             settings = settings.model_copy(update={"n_repeats": n_repeats})
         if attack_breadth is not None:
@@ -254,12 +291,16 @@ def analyze(
             tool, profile, llm,
             baseline_mode=settings.baseline_attacks,
             breadth=settings.attack_breadth,
+            taxonomy=settings.attack_taxonomy,
         )
+        n_injection = sum(1 for p in adversarial_prompts if p.injections)
         prog.update(
             t,
             description=(
                 f"[green]{len(adversarial_prompts)} adversarial prompts generated[/] "
-                f"(attacker={settings.baseline_attacks})"
+                f"(attacker={settings.baseline_attacks}, taxonomy={settings.attack_taxonomy}"
+                + (f", {n_injection} indirect-injection" if n_injection else "")
+                + ")"
             ),
         )
         prog.stop_task(t)
@@ -296,12 +337,15 @@ def analyze(
 
     attack_records = []
     attack_table = Table(show_header=True, header_style="bold cyan", border_style="dim")
-    attack_table.add_column("Record ID", style="dim", width=22)
-    attack_table.add_column("Harm Category", width=18)
+    attack_table.add_column("Record ID", style="dim", width=26)
+    attack_table.add_column("Objective", width=26)
+    attack_table.add_column("Channel", width=12)
     attack_table.add_column("Score", justify="right", width=8)
-    attack_table.add_column("Success?", width=10)
+    attack_table.add_column("Success?", width=12)
     attack_table.add_column("Iterations", width=10)
     attack_table.add_column("Refusal?", width=10)
+
+    monitor = AttackMonitor([_objective_label_of(p) for p in adversarial_prompts])
 
     def _run_single_attack(index_and_prompt: tuple[int, AdversarialPrompt]) -> AttackRecord:
         i, adv_prompt = index_and_prompt
@@ -316,12 +360,23 @@ def analyze(
             success_threshold=settings.attack_success_threshold,
             record_index=i + 1,
             seeds=seeds_list,
+            on_progress=monitor.handle_event,
         )
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
-        t = prog.add_task(f"Running {len(adversarial_prompts)} attack cycles in parallel...", total=len(adversarial_prompts))
-        
-        workers = max(1, min(len(adversarial_prompts), settings.attack_parallelism))
+    workers = max(1, min(len(adversarial_prompts), settings.attack_parallelism))
+    console.print(
+        f"  [dim]Running {len(adversarial_prompts)} attack cycles "
+        f"({workers} worker{'s' if workers != 1 else ''}, "
+        f"up to {settings.max_iterations} refinement iterations each)[/]"
+    )
+    # Live view: each row updates as its cycle progresses, so a long agent or LLM
+    # call shows as an elapsed timer instead of a frozen screen.
+    with Live(
+        get_renderable=monitor.render,
+        console=console,
+        refresh_per_second=8,
+        transient=True,
+    ):
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(_run_single_attack, (i, p))
@@ -329,14 +384,9 @@ def analyze(
             ]
             for future in concurrent.futures.as_completed(futures):
                 try:
-                    record = future.result()
-                    attack_records.append(record)
-                    prog.update(t, advance=1, description=f"[dim]Finished {record.harm_category.value}[/]")
+                    attack_records.append(future.result())
                 except Exception as exc:
                     err_console.print(f"[bold red]Error running attack:[/] {exc}")
-                    prog.update(t, advance=1)
-        
-        prog.stop_task(t)
 
     # Sort attack records back to original order based on Record ID
     attack_records.sort(key=lambda r: r.record_id)
@@ -347,9 +397,15 @@ def analyze(
         n_iters = len(record.attack_trajectory)
         refusal_text = f"[green]P{record.refusal_attempt_number}[/]" if record.refusal_occurred else "[dim]No[/]"
 
+        channel_text = (
+            "[magenta]tool result[/]" if record.delivery_channel == "tool_result"
+            else "[dim]user turn[/]"
+        )
         attack_table.add_row(
             record.record_id,
-            record.harm_category.value,
+            (record.misuse_category.value if record.misuse_category
+             else record.harm_category.value),
+            channel_text,
             f"[{score_color}]{record.final_score:.2f}[/]",
             success_text,
             str(n_iters),
@@ -370,11 +426,22 @@ def analyze(
     # ══════════════════════════════════════════════════════════════════════════
     console.rule("[bold cyan]STAGE 2 — Failure Analysis[/]")
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
-        t = prog.add_task("Analysing attack surfaces...", total=None)
+    # Per-record advance: this loop is one LLM call per attack record, so a single
+    # spinner with no counter looks hung for the whole stage.
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as prog:
+        t = prog.add_task("Analysing attack surfaces", total=len(attack_records))
         findings = []
         for record in attack_records:
+            prog.update(t, description=f"Analysing [cyan]{record.record_id}[/]")
             findings.append(analyze_attack(record, tool, llm))
+            prog.advance(t)
         prog.update(t, description=f"[green]{len(findings)} vulnerability findings produced[/]")
         prog.stop_task(t)
 
@@ -461,6 +528,7 @@ def analyze(
             policy=policy,
             output_dir=output_dir,
             success_threshold=settings.attack_success_threshold,
+            benign_dir=settings.benign_dir,
         )
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
@@ -536,6 +604,18 @@ def harden(
         None,
         "--baseline-attacks",
         help="Stage 1 attack source: 'llm' (default) or 'template' (skip LLM, use fallback templates).",
+    ),
+    attack_taxonomy: Optional[str] = typer.Option(
+        None,
+        "--attack-taxonomy",
+        help="Attack objectives: 'misuse' (default, tool-capability misuse incl. "
+        "indirect injection) or 'harm' (legacy AgentHarm content-harm categories).",
+    ),
+    benign_dir: Optional[Path] = typer.Option(
+        None,
+        "--benign-dir",
+        help="Directory of benign-task suites for the utility (BPR) metric. Use "
+        "benign_tasks_recorded/ to score against agent-recorded trajectories.",
     ),
     n_repeats: Optional[int] = typer.Option(
         None,
@@ -635,6 +715,14 @@ def harden(
             if baseline_attacks not in {"llm", "template"}:
                 raise ValueError(f"--baseline-attacks must be 'llm' or 'template', got {baseline_attacks!r}")
             settings = settings.model_copy(update={"baseline_attacks": baseline_attacks})
+        if attack_taxonomy is not None:
+            if attack_taxonomy not in {"misuse", "harm"}:
+                raise ValueError(
+                    f"--attack-taxonomy must be 'misuse' or 'harm', got {attack_taxonomy!r}"
+                )
+            settings = settings.model_copy(update={"attack_taxonomy": attack_taxonomy})
+        if benign_dir is not None:
+            settings = settings.model_copy(update={"benign_dir": benign_dir})
         if n_repeats is not None:
             settings = settings.model_copy(update={"n_repeats": n_repeats})
         if attack_breadth is not None:

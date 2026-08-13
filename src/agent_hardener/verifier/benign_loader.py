@@ -80,6 +80,11 @@ def _parse_suite(path: Path, tool_name: str) -> BenignTaskSuite:
                 task_id=raw.get("task_id", f"benign-{len(tasks) + 1}"),
                 description=raw.get("description", ""),
                 tool_calls=calls,
+                prompt=raw.get("prompt", ""),
             )
         )
-    return BenignTaskSuite(tool_name=data.get("tool_name", tool_name), tasks=tasks)
+    return BenignTaskSuite(
+        tool_name=data.get("tool_name", tool_name),
+        tasks=tasks,
+        provenance=data.get("provenance", "hand_authored"),
+    )
