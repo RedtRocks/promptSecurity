@@ -265,6 +265,14 @@ class ToolCall(BaseModel):
         "content (indirect prompt injection). Marks the integrity boundary: every "
         "subsequent decision in the trajectory was made on tainted input.",
     )
+    returned_handles: list[str] = Field(
+        default_factory=list,
+        description="Server-minted handles returned by this call's response. Under "
+        "MCP 2026-07-28 the protocol has no sessions, so cross-call state travels "
+        "as opaque handles passed back as ordinary tool arguments. A handle minted "
+        "by a read of high-confidentiality data is itself a taint carrier: whoever "
+        "later passes it is acting on that data, even in a different request.",
+    )
 
 
 class AgentTrajectory(BaseModel):
@@ -440,6 +448,20 @@ class TaintLevel(str, Enum):
     LOW = "low"
 
 
+class TaintBinding(str, Enum):
+    """What a session taint level is attached to.
+
+    Pre-2026 MCP gave every connection an ``Mcp-Session-Id``, so "the session"
+    was a transport-level fact and taint could be scoped to it implicitly. The
+    2026-07-28 revision removed protocol sessions entirely, which means an
+    information-flow policy must now say *explicitly* what carries its taint.
+    """
+
+    TRAJECTORY = "trajectory"
+    AUTH_SUBJECT = "auth_subject"
+    HANDLE = "handle"
+
+
 class TaintPropagationRule(BaseModel):
     """One taint propagation rule with the attack chain that motivated it."""
 
@@ -452,6 +474,16 @@ class TaintPropagationRule(BaseModel):
 class SessionTaintRules(BaseModel):
     initial_session_taint: TaintLevel
     taint_propagation_rules: list[TaintPropagationRule] = Field(default_factory=list)
+    taint_binding: TaintBinding = Field(
+        default=TaintBinding.TRAJECTORY,
+        description="What the session taint is bound to. MCP 2026-07-28 removed "
+        "protocol-level sessions (no Mcp-Session-Id, no initialize handshake), so "
+        "'the session' is no longer something the transport provides. TRAJECTORY "
+        "preserves the pre-2026 semantics (taint lives for one agent trajectory). "
+        "AUTH_SUBJECT binds taint to the authenticated principal, which is what "
+        "actually survives statelessness. HANDLE binds it to server-minted handles, "
+        "the spec's own replacement for cross-call state.",
+    )
     untrusted_input_taints_session: bool = Field(
         default=True,
         description="Integrity rule (IFC-002). When True, reading attacker-"

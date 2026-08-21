@@ -357,6 +357,8 @@ def analyze(
             agent=agent,
             llm=llm,
             max_iterations=settings.max_iterations,
+            refine_patience=settings.refine_patience,
+            refine_min_improvement=settings.refine_min_improvement,
             success_threshold=settings.attack_success_threshold,
             record_index=i + 1,
             seeds=seeds_list,
@@ -496,6 +498,8 @@ def analyze(
         t = prog.add_task("Building SAMOS policy (taint rules + enforcement)...", total=None)
         policy = build_policy(
             tool_name=tool.name,
+            known_parameters=set((tool.input_schema.get("properties") or {}).keys())
+            or {p.name for p in tool.parameters},
             confidentiality=confidentiality,
             capabilities=capabilities,
             analysis=stage2_report,

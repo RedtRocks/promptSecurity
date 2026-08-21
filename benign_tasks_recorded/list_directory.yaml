@@ -1,0 +1,42 @@
+# Benign trajectories RECORDED from a live agent (not hand-authored).
+# Regenerate with scripts/record_benign_trajectories.py
+tool_name: list_directory
+provenance: recorded
+tasks:
+- task_id: list-workspace-root
+  description: List the workspace root to orient the agent.
+  prompt: List the workspace root to orient the agent.
+  tool_calls:
+  - tool_name: list_directory
+    parameters:
+      path: /
+      recursive: false
+    success: true
+    response: '[simulated] listing of /: [''a.txt'', ''b.txt'']'
+- task_id: list-src
+  description: List a source subdirectory before reading files.
+  prompt: List a source subdirectory before reading files.
+  tool_calls:
+  - tool_name: list_directory
+    parameters:
+      path: source
+      recursive: false
+    success: true
+    response: '[simulated] listing of source: [''a.txt'', ''b.txt'']'
+- task_id: list-relative
+  description: List the current directory with a relative path.
+  prompt: List the current directory with a relative path.
+  tool_calls:
+  - tool_name: list_directory
+    parameters:
+      path: .
+      recursive: false
+    success: true
+    response: '[simulated] listing of .: [''a.txt'', ''b.txt'']'
+recording_notes:
+  n_source_tasks: 3
+  n_recorded: 3
+  n_dropped: 0
+  dropped: []
+  agent_endpoint: http://127.0.0.1:8080
+  agent_model_env: see AGENT_LLM_MODEL on the agent server

@@ -234,6 +234,8 @@ def run_hardening_pipeline(
             llm=llm,
             agent=effective_agent,
             max_iterations=settings.max_iterations,
+            refine_patience=settings.refine_patience,
+            refine_min_improvement=settings.refine_min_improvement,
             attack_parallelism=settings.attack_parallelism,
             success_threshold=settings.attack_success_threshold,
             round_index=round_index,
@@ -348,6 +350,8 @@ def _run_round(
     llm: LLMProvider,
     agent: AnyAgentClient,
     max_iterations: int,
+    refine_patience: int,
+    refine_min_improvement: float,
     attack_parallelism: int,
     success_threshold: float,
     round_index: int,
@@ -437,6 +441,8 @@ def _run_round(
             agent=agent,
             llm=llm,
             max_iterations=max_iterations,
+            refine_patience=refine_patience,
+            refine_min_improvement=refine_min_improvement,
             success_threshold=success_threshold,
             record_index=i + 1,
             seeds=seeds_list,
@@ -543,6 +549,8 @@ def _run_round(
         t = prog.add_task("Building SAMOS policy (taint rules + enforcement)...", total=None)
         policy: SAMOSPolicy = build_policy(
             tool_name=working_tool.name,
+            known_parameters=set((working_tool.input_schema.get("properties") or {}).keys())
+            or {p.name for p in working_tool.parameters},
             confidentiality=confidentiality,
             capabilities=capabilities,
             analysis=stage2_report,

@@ -25,6 +25,7 @@ from agent_hardener.shared.schemas import (
     ConfidentialityLevel,
     EnforcementAction,
     SAMOSPolicy,
+    TaintBinding,
     TaintLevel,
     ToolCall,
 )
@@ -120,6 +121,7 @@ def replay_trajectory(
     tool_calls: list[ToolCall],
     policy: SAMOSPolicy,
     attack_succeeded: bool = False,
+    tainted_handles: set[str] | None = None,
 ) -> VerifierVerdict:
     """Replay an arbitrary tool-call trajectory through the policy gates.
 
@@ -134,6 +136,11 @@ def replay_trajectory(
         policy: The SAMOSPolicy to enforce.
         attack_succeeded: Whether this trajectory was a successful attack against
             the unguarded agent (unused for benign tasks; recorded for auditing).
+        tainted_handles: Caller-owned set of tainted server-minted handles, MUTATED
+            in place. This is the whole point of HANDLE binding: MCP 2026-07-28 has
+            no protocol session, so a stateless gateway persists this set itself
+            (keyed by auth subject) and passes it to every replay. Omit it and each
+            replay starts clean, which is the pre-2026 trajectory-scoped behaviour.
 
     Returns:
         A VerifierVerdict with the deterministic outcome.
@@ -163,6 +170,16 @@ def replay_trajectory(
     confirm_only_fired = False
     # Integrity taint: has the session ingested attacker-controlled tool output?
     integrity_tainted = False
+    # Confidentiality taint carried by server-minted handles. Under MCP
+    # 2026-07-28 there is no protocol session to hold taint, so a handle minted
+    # by a high-confidentiality read carries that taint itself: passing it later
+    # is acting on the data it refers to. Only consulted when the policy declares
+    # HANDLE binding, so TRAJECTORY-bound policies replay exactly as before.
+    if tainted_handles is None:
+        tainted_handles = set()
+    handle_binding = (
+        policy.session_taint_rules.taint_binding == TaintBinding.HANDLE
+    )
 
     for step_idx, call in enumerate(tool_calls):
         # Gate 1 — capability check
@@ -184,6 +201,18 @@ def replay_trajectory(
         # write side was mislabeled low) would block itself on its first call,
         # destroying all legitimate use. Exfiltration = a low-write while the
         # session is ALREADY high-tainted from earlier reads.
+        # A call that passes a tainted handle is acting on the data that handle
+        # refers to, so it inherits that taint. This runs BEFORE the exfiltration
+        # test: otherwise a write carrying a tainted handle would be evaluated
+        # against a stale LOW taint and pass.
+        if handle_binding and _carries_tainted_handle(call, tainted_handles):
+            if current_taint == TaintLevel.LOW:
+                verdict.notes.append(
+                    f"Step {step_idx} ({call.tool_name}) passed a handle minted by a "
+                    "high-confidentiality read; session taint inherited as HIGH."
+                )
+            current_taint = TaintLevel.HIGH
+
         taint_before = current_taint
         if _tool_writes_low_confidentiality(call.tool_name, policy) and taint_before == TaintLevel.HIGH:
             verdict.taint_violation = True
@@ -241,6 +270,14 @@ def replay_trajectory(
                 current_taint = TaintLevel.HIGH
                 verdict.notes.append(
                     f"Step {step_idx} ({call.tool_name}) upgraded session taint to HIGH."
+                )
+            # Handles minted by this read carry the taint onward, across the
+            # request boundary that statelessness introduces.
+            if handle_binding and call.returned_handles:
+                tainted_handles.update(call.returned_handles)
+                verdict.notes.append(
+                    f"Step {step_idx} ({call.tool_name}) minted tainted handle(s): "
+                    + ", ".join(sorted(call.returned_handles))
                 )
 
         # Gate 3 — enforcement rules whose trigger_condition references this tool
@@ -470,6 +507,30 @@ def _looks_like_exfil_sink(tool_name: str) -> bool:
         "email", "message", "webhook", "tweet", "http_request",
     )
     return any(m in name for m in sink_markers)
+
+
+
+def _carries_tainted_handle(call: ToolCall, tainted_handles: set[str]) -> bool:
+    """True when any parameter value of ``call`` is a tainted handle.
+
+    Handles are opaque server-minted strings passed as ordinary tool arguments
+    (MCP 2026-07-28 removed protocol sessions, so this is how cross-call state
+    now travels). Nested structures are searched because a handle is routinely
+    passed inside a list or object rather than as a bare top-level argument.
+    """
+    if not tainted_handles:
+        return False
+
+    def _scan(value: object) -> bool:
+        if isinstance(value, str):
+            return value in tainted_handles
+        if isinstance(value, dict):
+            return any(_scan(v) for v in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(_scan(v) for v in value)
+        return False
+
+    return _scan(call.parameters)
 
 
 def _tool_writes_low_confidentiality(tool_name: str, policy: SAMOSPolicy) -> bool:

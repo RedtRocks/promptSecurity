@@ -9,6 +9,7 @@ Builds the complete SAMOS policy:
 from __future__ import annotations
 
 import json
+import difflib
 import re
 import textwrap
 from typing import Any
@@ -131,6 +132,7 @@ def build_policy(
     records: list[AttackRecord],
     llm: LLMProvider,
     success_threshold: float = 0.5,
+    known_parameters: set[str] | None = None,
 ) -> SAMOSPolicy:
     """Build the complete SAMOS policy document (Stage 3 output).
 
@@ -160,6 +162,7 @@ def build_policy(
     # Step 3.4 — Enforcement rules for attacks not already covered by taint rules
     enforcement_rules = _build_enforcement_rules(
         tool_name=tool_name,
+        known_parameters=known_parameters or set(),
         confidentiality=confidentiality,
         capabilities=capabilities,
         successful_records=successful_records,
@@ -349,8 +352,100 @@ def _guard_core_tool_blocks(
     return guarded
 
 
+
+# Parameter-name keywords that are not tool arguments: they refer to the call
+# itself, the session, or the trigger grammar.
+_NON_PARAMETER_IDENTIFIERS = {
+    "tool", "tool_name", "session", "taint", "action", "user", "prompt",
+    "history", "step", "capability", "confidentiality", "response", "result",
+}
+
+# Matches "<identifier> ==/!=/CONTAINS '<literal>'" and "<identifier>.contains(...)".
+_ARG_REF_RE = re.compile(
+    r"\b([a-z_][a-z0-9_]*)\s*(?:==|!=|<=|>=|\.contains\(|\s+CONTAINS\s+|\s+contains\s+)",
+    re.IGNORECASE,
+)
+
+
+def _repair_parameter_names(
+    trigger: str, known_parameters: set[str]
+) -> tuple[str, list[str]]:
+    """Align argument references in a trigger with the tool's real parameters.
+
+    Stage 3 is written by an LLM and routinely invents parameter names that the
+    tool does not have (``file_path`` for a tool whose argument is ``path``,
+    ``working_directory`` for ``working_dir``). Such a rule is not merely
+    useless: it **fails open**. The verifier's fail-safe only degrades to
+    name-only firing when a trigger has *no* evaluable literal; a trigger whose
+    literal sits on a non-existent parameter evaluates cleanly to false, so a
+    correct-looking BLOCK rule never fires. Measured over the corpus, 34% of
+    generated rules referenced a parameter the tool does not have.
+
+    Near-misses are repaired against the real schema. Names that cannot be
+    resolved are reported so the caller can drop the argument clause and let the
+    rule degrade to the conservative name-only behaviour.
+
+    Returns:
+        The repaired trigger, and the list of identifiers that could not be
+        resolved to a real parameter.
+    """
+    if not known_parameters:
+        return trigger, []
+
+    unresolved: list[str] = []
+    repaired = trigger
+
+    for ident in dict.fromkeys(_ARG_REF_RE.findall(trigger)):
+        low = ident.lower()
+        if low in _NON_PARAMETER_IDENTIFIERS or ident in known_parameters:
+            continue
+
+        match = _closest_parameter(ident, known_parameters)
+        if match:
+            repaired = re.sub(rf"\b{re.escape(ident)}\b", match, repaired)
+        else:
+            unresolved.append(ident)
+
+    return repaired, unresolved
+
+
+def _closest_parameter(ident: str, known_parameters: set[str]) -> str | None:
+    """Best real parameter for an invented name, or None if there is no clear match.
+
+    Deliberately conservative: substring containment in either direction, then a
+    single close difflib match. A wrong repair would silently re-target a BLOCK
+    rule at a different argument, which is worse than dropping the clause.
+    """
+    low = ident.lower()
+    candidates = [k for k in known_parameters if low in k.lower() or k.lower() in low]
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        return min(candidates, key=len)
+
+    close = difflib.get_close_matches(low, [k.lower() for k in known_parameters], n=1, cutoff=0.72)
+    if close:
+        for k in known_parameters:
+            if k.lower() == close[0]:
+                return k
+    return None
+
+
+def _strip_unresolved_clauses(trigger: str, unresolved: list[str]) -> str:
+    """Remove AND-clauses referencing parameters that do not exist.
+
+    The remaining trigger keeps its tool-identity condition, so the verifier's
+    documented fail-safe applies and the rule over-approximates instead of
+    failing open.
+    """
+    parts = re.split(r"\s+AND\s+", trigger, flags=re.IGNORECASE)
+    kept = [c for c in parts if not any(re.search(rf"\b{re.escape(u)}\b", c) for u in unresolved)]
+    return " AND ".join(kept) if kept else trigger
+
+
 def _build_enforcement_rules(
     tool_name: str,
+    known_parameters: set[str],
     confidentiality: ConfidentialityAnnotations,
     capabilities: CapabilityAnnotations,
     successful_records: list[AttackRecord],
@@ -404,10 +499,19 @@ def _build_enforcement_rules(
             except ValueError:
                 action = EnforcementAction.AUDIT
 
+            trigger = item.get("trigger_condition", "")
+            trigger, unresolved = _repair_parameter_names(trigger, known_parameters)
+            if unresolved:
+                # Drop the unmatched clause rather than ship a rule that cannot
+                # fire. What remains still names the tool, so the verifier's
+                # fail-safe applies and the rule over-blocks instead of failing
+                # open.
+                trigger = _strip_unresolved_clauses(trigger, unresolved)
+
             rules.append(
                 EnforcementRule(
                     rule_id=item.get("rule_id", f"ENF-{record.record_id}"),
-                    trigger_condition=item.get("trigger_condition", ""),
+                    trigger_condition=trigger,
                     action=action,
                     reason=item.get("reason", ""),
                     motivated_by_attack=record.record_id,

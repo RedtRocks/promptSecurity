@@ -38,6 +38,13 @@ class Settings(BaseSettings):
 
     # Pipeline settings
     max_iterations: int = Field(6, ge=0, le=10)  # 0 = baseline P0-only, no refinement
+    # Plateau early-stop. Measured on read_file: 4 of 6 attacks burned the full
+    # 1+6 attempt budget sitting at a flat 0.35, i.e. 80% of pipeline runtime was
+    # refinement that moved nothing. Stopping after N consecutive non-improving
+    # attempts leaves those records with the same final score they would have
+    # reached anyway. Set refine_patience=0 to disable and restore the old cost.
+    refine_patience: int = Field(2, ge=0, le=10)
+    refine_min_improvement: float = Field(0.05, ge=0.0, le=1.0)
     attack_parallelism: int = Field(2, ge=1, le=8)
     attack_success_threshold: float = Field(0.95, ge=0.0, le=1.0)
     hardening_rounds: int = Field(3, ge=1, le=10)

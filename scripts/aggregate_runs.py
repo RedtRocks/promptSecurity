@@ -59,6 +59,8 @@ CSV_COLUMNS = [
     "policy_requiring_model_level",
     "policy_unmitigated",
     # Security/utility tradeoff — the headline research metric.
+    "n_successful_attacks",
+    "abr_defined",
     "attack_block_rate",
     "mitigation_rate",
     "benign_pass_rate",
@@ -115,6 +117,8 @@ def _row_from_dir(d: Path, success_threshold: float = 0.95) -> dict[str, Any] | 
     coverage = report.get("stage3_policy", {}).get("policy_coverage", {})
     su = report.get("security_utility", {})
 
+    n_successful_attacks = su.get("n_successful_attacks", 0) or 0
+    abr_defined = bool(n_successful_attacks)
     return {
         "manifest_path": str(manifest_path),
         "command": manifest.get("command", ""),
@@ -145,11 +149,18 @@ def _row_from_dir(d: Path, success_threshold: float = 0.95) -> dict[str, Any] | 
         "policy_partially_mitigated": coverage.get("attacks_partially_mitigated", ""),
         "policy_requiring_model_level": coverage.get("attacks_requiring_model_level_defense", ""),
         "policy_unmitigated": coverage.get("unmitigated_attacks", ""),
-        "attack_block_rate": su.get("attack_block_rate", ""),
-        "mitigation_rate": su.get("mitigation_rate", ""),
+        "n_successful_attacks": n_successful_attacks,
+        "abr_defined": abr_defined,
+        # ABR/mitigation/F1 are ratios over SUCCESSFUL attacks. With no successful
+        # attack the denominator is empty, so they are UNDEFINED, not zero. The
+        # verifier reports 0.0 there; emitting that verbatim would let a tool the
+        # agent simply refused drag the corpus mean down as if the policy had
+        # failed. Blank means "no data", and _aggregate_by_tool skips blanks.
+        "attack_block_rate": su.get("attack_block_rate", "") if abr_defined else "",
+        "mitigation_rate": su.get("mitigation_rate", "") if abr_defined else "",
         "benign_pass_rate": su.get("benign_pass_rate", ""),
         "over_block_rate": su.get("over_block_rate", ""),
-        "utility_security_f1": su.get("utility_security_f1", ""),
+        "utility_security_f1": su.get("utility_security_f1", "") if abr_defined else "",
         "degenerate_deny_all": su.get("degenerate_deny_all", ""),
     }
 
