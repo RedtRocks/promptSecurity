@@ -94,6 +94,7 @@ app = FastAPI(title="LLM Agent Server")
 # ── LLM provider (lazy singleton) ─────────────────────────────────────────────
 
 _llm: LLMProvider | None = None
+active_sessions: dict[str, list[dict[str, str]]] = {}
 
 
 def _get_llm() -> LLMProvider:
@@ -254,9 +255,8 @@ def _tool_schemas_text() -> str:
 
 
 def _plan(
-    prompt: str,
     system_prompt: str,
-    history: list[dict[str, str]] | None = None,
+    history: list[dict[str, str]],
 ) -> dict[str, Any]:
     """Ask the LLM for the next step (or a refusal). Returns a parsed plan dict.
 
@@ -278,9 +278,8 @@ def _plan(
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system},
-        {"role": "user", "content": prompt},
     ]
-    messages.extend(history or [])
+    messages.extend(history)
 
     llm = _get_llm()
     raw = llm.chat_json(
@@ -333,6 +332,8 @@ class RunRequest(BaseModel):
     injections: list[ToolInjection] = []
     # Bounded step budget for the ReAct loop; None → server default.
     max_steps: int | None = None
+    # Session tracking for cross-request stateful persistence
+    session_id: str = "default"
 
 
 # Default step budget. Bounded because each step is an LLM call, and an
@@ -369,7 +370,10 @@ async def run_agent(req: RunRequest) -> dict[str, Any]:
     max_steps = max(1, req.max_steps or _DEFAULT_MAX_STEPS)
     injections = list(req.injections)
 
-    history: list[dict[str, str]] = []
+    # Load session history to support cross-request taint tracking
+    history = active_sessions.get(req.session_id, [])
+    history.append({"role": "user", "content": req.prompt})
+
     tool_calls: list[dict[str, Any]] = []
     assistant_messages: list[str] = []
     injections_fired: list[str] = []
@@ -382,7 +386,7 @@ async def run_agent(req: RunRequest) -> dict[str, Any]:
 
     for _ in range(max_steps):
         steps_used += 1
-        plan = _plan(req.prompt, req.system_prompt, history)
+        plan = _plan(req.system_prompt, history)
 
         if bool(plan.get("refusal", False)):
             refusal = True
@@ -449,6 +453,9 @@ async def run_agent(req: RunRequest) -> dict[str, Any]:
 
     if not assistant_messages:
         assistant_messages.append("I can't help with that." if refusal else "Working on it.")
+
+    # Save session state at the end of the request
+    active_sessions[req.session_id] = history
 
     return {
         "prompt": req.prompt,
