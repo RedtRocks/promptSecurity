@@ -5,24 +5,11 @@ a FastAPI service that sits between an LLM client and a real agent endpoint,
 applies the three deterministic SAMOS gates (capability / taint / enforcement
 rule) to every trajectory the underlying agent returns, and rewrites blocked
 tool calls before they reach the caller.
-
-Architecture::
-
-    LLM client ──POST /run──▶ gateway ──POST /run──▶ real agent
-                                  │
-                                  ├─ load SAMOSPolicy at startup
-                                  ├─ wrap AgentClient in PolicyEnforcingAgentClient
-                                  ├─ emit per-request enforcement audit
-                                  └─ expose /policy and /audit for observability
-
-The gateway is a thin orchestration layer over the existing
-`PolicyEnforcingAgentClient`. All policy logic lives in `verifier/`; this file
-only handles the HTTP/JSON-RPC surface and operational concerns (audit, health,
-graceful shutdown).
 """
 
 import json
 import time
+import sqlite3
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,9 +22,21 @@ from agent_hardener.shared.schemas import SAMOSPolicy
 from agent_hardener.shared.settings import Settings
 from agent_hardener.verifier import PolicyEnforcingAgentClient
 
-# FastAPI is an optional dependency. Import at module level (not inside the
-# factory) so runtime type-hint resolution works for FastAPI's request parser;
-# guard it so the rest of the package still imports without FastAPI installed.
+# --- STATEFUL TAINT PERSISTENCE: Database Setup ---
+DB_PATH = "gateway_sessions.db"
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                current_taint TEXT DEFAULT 'low'
+            )
+        """)
+init_db()
+# --------------------------------------------------
+
+
 try:
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse
@@ -49,18 +48,7 @@ except ImportError:
 
 # ── Policy loading ────────────────────────────────────────────────────────────
 
-
 def load_policy(policy_path: Path) -> SAMOSPolicy:
-    """Load a SAMOSPolicy from either a raw policy JSON or a full report.json.
-
-    Accepts:
-      - The raw object emitted by `policy.model_dump_json()`
-      - A `report.json` containing `stage3_policy` at the top level
-      - A `hardening_history.json` entry's `policy` field (used for round-by-round
-        deploys)
-
-    Raises FileNotFoundError or ValueError on bad input — fail fast at startup.
-    """
     if not policy_path.exists():
         raise FileNotFoundError(f"Policy file not found: {policy_path}")
 
@@ -83,9 +71,6 @@ def load_policy(policy_path: Path) -> SAMOSPolicy:
 
 # ── App factory ───────────────────────────────────────────────────────────────
 
-
-# Type alias for the inner agent dependency — keeps the gateway testable without
-# spinning up a real HTTP server behind it.
 AgentFactory = Callable[[], Any]
 
 
@@ -99,18 +84,13 @@ def create_app(
     audit_log_path: Optional[Path] = None,
     audit_ring_size: int = 500,
 ) -> "FastAPI":
-    """Build the FastAPI gateway app.
-
-    Exactly one of `policy` or `policy_path` must be provided.
-    Exactly one of `agent_endpoint` or `inner_agent` must be provided.
-    """
+    
     if not _FASTAPI_AVAILABLE:
         raise ImportError(
             "FastAPI is required for the gateway. Install with: "
             "pip install -e \".[dev]\"  (or add fastapi + uvicorn to your deps)."
         )
 
-    # ── Resolve inputs ────────────────────────────────────────────────────────
     if policy is None and policy_path is None:
         raise ValueError("create_app requires policy or policy_path")
     if policy is None:
@@ -127,7 +107,6 @@ def create_app(
 
     enforcer = PolicyEnforcingAgentClient(inner_agent, policy)
 
-    # ── Audit ring + optional JSONL sink ──────────────────────────────────────
     audit_ring: deque[dict[str, Any]] = deque(maxlen=audit_ring_size)
     audit_lock = Lock()
 
@@ -140,10 +119,8 @@ def create_app(
                 with audit_log_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(event, ensure_ascii=False) + "\n")
             except Exception:
-                # Audit-log failures must not break request handling.
                 pass
 
-    # ── App ───────────────────────────────────────────────────────────────────
     @asynccontextmanager
     async def _lifespan(_app: "FastAPI") -> AsyncIterator[None]:
         try:
@@ -173,13 +150,11 @@ def create_app(
 
     @app.get("/policy")
     def get_policy() -> dict[str, Any]:
-        """Return the policy the gateway is currently enforcing."""
         result: dict[str, Any] = json.loads(policy.model_dump_json())
         return result
 
     @app.get("/audit")
     def get_audit(limit: int = 50) -> dict[str, Any]:
-        """Return the most recent enforcement events (newest last)."""
         with audit_lock:
             events = list(audit_ring)
         if limit > 0:
@@ -188,24 +163,30 @@ def create_app(
 
     @app.post("/run")
     async def run(request: Request) -> JSONResponse:
-        """Forward a prompt to the inner agent and enforce the policy on the result.
-
-        Accepts the same body shape as the protected agent: ``{"prompt": "..."}``.
-        Returns the AgentTrajectory JSON, augmented with ``enforcement_log`` so
-        clients can see which gates fired without having to call ``/audit``.
-        """
         try:
             body = await request.json()
         except Exception:
             raise HTTPException(status_code=400, detail="Body must be valid JSON.")
 
         prompt = body.get("prompt")
+        # Extract session_id for taint tracking
+        session_id = body.get("session_id", "default_session")
+
         if not isinstance(prompt, str) or not prompt.strip():
             raise HTTPException(status_code=400, detail="Body must contain a non-empty 'prompt' string.")
 
+        # --- STATEFUL TAINT PERSISTENCE: Read Previous State ---
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT current_taint FROM sessions WHERE session_id = ?", (session_id,))
+            row = cursor.fetchone()
+            persisted_taint = row[0] if row else None
+        # -------------------------------------------------------
+
         t0 = time.time()
         try:
-            trajectory = enforcer.run_task(prompt)
+            # Pass the retrieved taint state to the enforcer
+            trajectory = enforcer.run_task(prompt, starting_taint=persisted_taint)
         except Exception as exc:
             _record_audit({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -218,6 +199,19 @@ def create_app(
         log = list(enforcer.last_enforcement_log)
         blocked = any(e.get("action") == "BLOCK" for e in log)
 
+        # --- STATEFUL TAINT PERSISTENCE: Save New State ---
+        final_taint = persisted_taint or policy.session_taint_rules.initial_session_taint.value
+        if log and "final_taint" in log[-1]:
+            final_taint = log[-1]["final_taint"]
+            
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("""
+                INSERT INTO sessions (session_id, current_taint) 
+                VALUES (?, ?) 
+                ON CONFLICT(session_id) DO UPDATE SET current_taint=excluded.current_taint
+            """, (session_id, str(final_taint)))
+        # --------------------------------------------------
+
         audit_event = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "prompt_preview": prompt[:200],
@@ -226,6 +220,8 @@ def create_app(
             "blocked": blocked,
             "enforcement_log": log,
             "elapsed_ms": int((time.time() - t0) * 1000),
+            "session_id": session_id,
+            "final_taint": str(final_taint)
         }
         _record_audit(audit_event)
 
@@ -236,12 +232,6 @@ def create_app(
 
     @app.post("/tools/list")
     async def tools_list() -> dict[str, Any]:
-        """MCP-compatible tool listing — delegates to the inner agent.
-
-        Returns the tool annotation from the loaded policy so clients can see
-        the SAMOS labels (read/write confidentiality, capability allowed-sets)
-        the gateway is enforcing for each registered tool.
-        """
         annotation = policy.gateway_enforcement.tool_annotation
         return {
             "jsonrpc": "2.0",
@@ -250,7 +240,6 @@ def create_app(
             },
         }
 
-    # Stash references on the app for tests / introspection.
     app.state.policy = policy
     app.state.enforcer = enforcer
     app.state.audit_ring = audit_ring
