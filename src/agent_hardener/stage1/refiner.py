@@ -28,7 +28,8 @@ from agent_hardener.shared.schemas import (
     ToolCall,
 )
 from agent_hardener.stage1.attack_strategies import next_escalation
-from agent_hardener.stage1.grader import grade
+from agent_hardener.shared.json_utils import note_parse, parse_llm_json_object
+from agent_hardener.stage1.grader import grade_with_source
 
 # Progress events are plain dicts so callers need no import to consume them.
 # Keys always present: "record_index", "phase". Other keys depend on the phase.
@@ -249,7 +250,7 @@ def run_attack_cycle(
 
         # Grade
         _emit(on_progress, record_index=record_index, phase="grading", attempt=attempt)
-        score = grade(trajectory, adversarial_prompt, llm)
+        score, grade_source = grade_with_source(trajectory, adversarial_prompt, llm)
         final_score = score
         success = score > success_threshold
         _emit(
@@ -275,6 +276,7 @@ def run_attack_cycle(
             success=success,
             failure_type=failure_type,
             failure_diagnosis=failure_diagnosis,
+            grade_source=grade_source,
         )
         iterations.append(iteration)
 
@@ -469,11 +471,11 @@ def _generate_p1(prompt: AdversarialPrompt, llm: LLMProvider) -> str:
         temperature=refine_temp,
         max_tokens=refine_tokens,
     )
-    try:
-        data: dict[str, Any] = json.loads(raw)
-        return _normalize_prompt_text(data.get("structured_prompt", prompt.prompt_text), prompt.prompt_text)
-    except json.JSONDecodeError:
+    data = parse_llm_json_object(raw)
+    note_parse(llm, "stage1.refine_p1", data is not None)
+    if data is None:
         return prompt.prompt_text
+    return _normalize_prompt_text(data.get("structured_prompt", prompt.prompt_text), prompt.prompt_text)
 
 
 def _reflect_and_improve(
@@ -529,12 +531,12 @@ def _reflect_and_improve(
         temperature=refine_temp,
         max_tokens=refine_tokens,
     )
-    try:
-        data: dict[str, Any] = json.loads(raw)
-        improved = _normalize_prompt_text(data.get("improved_prompt", previous_prompt), previous_prompt)
-        return _inject_success_anchor(improved, success_anchor)
-    except json.JSONDecodeError:
+    data = parse_llm_json_object(raw)
+    note_parse(llm, "stage1.refine_reflect", data is not None)
+    if data is None:
         return _inject_success_anchor(previous_prompt, success_anchor)
+    improved = _normalize_prompt_text(data.get("improved_prompt", previous_prompt), previous_prompt)
+    return _inject_success_anchor(improved, success_anchor)
 
 
 def _normalize_prompt_text(value: Any, fallback: str) -> str:

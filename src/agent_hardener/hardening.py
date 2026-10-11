@@ -309,6 +309,7 @@ def run_hardening_pipeline(
         attack_records=final_round["attack_records"],
         adversarial_prompts=final_round["adversarial_prompts"],
         elapsed_s=time.time() - pipeline_start,
+        llm=llm,  # parse health is cumulative across rounds
         extra={
             "rounds_completed": rounds_completed,
             "final_agent_run_success_rate": final_agent_run_rate,

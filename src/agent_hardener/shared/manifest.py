@@ -26,6 +26,8 @@ def write_run_manifest(
     adversarial_prompts: list[Any],
     elapsed_s: float,
     extra: dict[str, Any] | None = None,
+    llm: Any = None,
+    findings: list[Any] | None = None,
 ) -> Path:
     """Write run_manifest.json next to the report. Returns the written path."""
     try:
@@ -73,6 +75,7 @@ def write_run_manifest(
             "baseline_attacks": settings.baseline_attacks,
             "n_repeats": settings.n_repeats,
             "enforce_prior_policy": settings.enforce_prior_policy,
+            "heldout_eval": settings.heldout_eval,
         },
         "agent_endpoint": settings.agent_endpoint,
         "pipeline_health": {
@@ -82,6 +85,16 @@ def write_run_manifest(
             "n_attacks": len(attack_records),
             "n_refusals": n_refused,
             "refusal_rate": n_refused / max(1, len(attack_records)),
+            # Which grader path produced each attempt's score. Only "llm" is an
+            # LLM-as-judge measurement; heuristic scores are tool-call matching.
+            "grade_sources": summarize_grade_sources(attack_records),
+            "n_stage2_fallback_findings": sum(
+                1 for f in (findings or []) if getattr(f, "is_fallback", False)
+            ),
+            # Per call site: how often the LLM's output could not be parsed and
+            # the stage fell back to a default. Nonzero rates mean the numbers
+            # partly reflect defaults, not the method.
+            "llm_parse_health": _parse_health(llm),
         },
         "environment": {
             "python": platform.python_version(),
@@ -97,3 +110,29 @@ def write_run_manifest(
     manifest_path = output_dir / "run_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest_path
+
+
+def summarize_grade_sources(attack_records: list[Any]) -> dict[str, Any]:
+    """Count graded attempts by grade source, plus the LLM-judge share."""
+    counts: dict[str, int] = {}
+    for record in attack_records:
+        for it in getattr(record, "attack_trajectory", []) or []:
+            source = getattr(it, "grade_source", "") or "unrecorded"
+            counts[source] = counts.get(source, 0) + 1
+    total = sum(counts.values())
+    return {
+        "counts": dict(sorted(counts.items())),
+        "n_attempts": total,
+        "llm_judge_share": (counts.get("llm", 0) / total) if total else 0.0,
+    }
+
+
+def _parse_health(llm: Any) -> dict[str, Any]:
+    health = getattr(llm, "parse_health", None)
+    if not callable(health):
+        return {}
+    try:
+        result = health()
+    except Exception:
+        return {}
+    return result if isinstance(result, dict) else {}

@@ -315,6 +315,9 @@ class AttackIteration(BaseModel):
     success: bool = False
     failure_type: FailureType = FailureType.NOT_APPLICABLE
     failure_diagnosis: str = ""
+    # Which grader path produced `score` (stage1.grader.GRADE_SOURCE_*). Only
+    # "llm" is an LLM-as-judge measurement; "" for records written before this.
+    grade_source: str = ""
 
 
 class AttackRecord(BaseModel):
@@ -376,6 +379,9 @@ class VulnerabilityFinding(BaseModel):
     exploit_type: ExploitType
     exploited_element: str = Field(description="Exact text or element name that was exploited")
     description: str
+    # True when the analyzer's LLM output could not be parsed and this finding
+    # is a default placeholder, not an analysis.
+    is_fallback: bool = False
 
 
 class EditAction(str, Enum):

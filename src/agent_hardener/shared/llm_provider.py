@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import warnings
 from typing import Any, Optional
 
@@ -35,6 +36,9 @@ class LLMProvider:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # site -> [n_calls, n_failed]; attack cycles run on worker threads.
+        self._parse_counts: dict[str, list[int]] = {}
+        self._parse_lock = threading.Lock()
         self._configure_env(settings)
         self._resolved_ollama_base_url = self._resolve_ollama_base_url()
         # Build a Router for automatic retry/fallback
@@ -115,11 +119,22 @@ class LLMProvider:
             return configured
 
         localhost = "http://localhost:11434"
+        if localhost == configured:
+            return configured
+        # Only prefer the local daemon if it actually serves every configured
+        # Ollama model; otherwise a running-but-empty local Ollama 404s every call.
+        wanted = {
+            m.split("/", 1)[1]
+            for m in (self._settings.default_model, self._settings.grader_model)
+            if m and m.startswith("ollama")
+        }
         try:
             resp = requests.get(f"{localhost}/api/tags", timeout=1.5)
             if resp.status_code == 200:
-                return localhost
-        except requests.RequestException:
+                local = {m.get("name", "") for m in resp.json().get("models", [])}
+                if wanted <= local:
+                    return localhost
+        except (requests.RequestException, ValueError):
             pass
 
         return configured
@@ -184,24 +199,36 @@ class LLMProvider:
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> str:
-        """Like chat(), but enforces JSON output mode where the provider supports it.
-        
-        For Ollama and other open-source models, we skip response_format since they
-        don't support the OpenAI json_object mode. Instead, we rely on prompt engineering
-        to guide them to output valid JSON.
+        """Like chat(), but enforces JSON output mode.
+
+        OpenAI/Anthropic get ``response_format=json_object`` via LiteLLM; every
+        other family goes through ``_chat_ollama``, which maps it to Ollama's
+        ``format: "json"``. Without it, gemma fences its JSON and qwen3 answers in
+        reasoning prose, so strict parsers failed on every call.
         """
-        family = self._grader_family if model_alias == "grader" else self._primary_family
-        response_format = None
-        if family in (ModelFamily.OPENAI, ModelFamily.ANTHROPIC):
-            response_format = {"type": "json_object"}
-        
         return self.chat(
             messages,
             model_alias=model_alias,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format=response_format,
+            response_format={"type": "json_object"},
         )
+
+    def record_parse(self, site: str, ok: bool) -> None:
+        """Count one parse of LLM output at `site` (e.g. 'stage1.grade')."""
+        with self._parse_lock:
+            counts = self._parse_counts.setdefault(site, [0, 0])
+            counts[0] += 1
+            if not ok:
+                counts[1] += 1
+
+    def parse_health(self) -> dict[str, dict[str, float]]:
+        """Per-site parse counts and failure rates, for the run manifest."""
+        with self._parse_lock:
+            return {
+                site: {"n_calls": n, "n_failed": failed, "failure_rate": failed / n if n else 0.0}
+                for site, (n, failed) in sorted(self._parse_counts.items())
+            }
 
     def _chat_ollama(
         self,

@@ -33,6 +33,14 @@ agent-hardener analyze --tool-file mcp_tools/read_file.yaml --config config.yaml
 # Variance estimation: 5 independent seed-sweep runs per attack cycle
 agent-hardener analyze --tool-file mcp_tools/read_file.yaml --config config.yaml --n-repeats 5
 
+# Held-out evaluation: score the policy on a second battery built from strategies it never saw
+agent-hardener analyze --tool-file mcp_tools/read_file.yaml --config config.yaml --heldout-eval
+
+# Ablation: offline leave-one-out over policy gates on a finished run (no LLM calls)
+python scripts/ablation_eval.py gates hardener_output/read_file --benign-dir benign_tasks_recorded
+# Ablation: live attack-side conditions (full / no-refine / template), mean ± sd over repeats
+python scripts/ablation_eval.py pipeline --tool-file mcp_tools/read_file.yaml --config config.yaml   --repeats 3 --heldout-eval --out-dir hardener_output/ablation
+
 # Hardening with live policy enforcement (round N>=2 wraps the agent with round N-1's policy)
 agent-hardener harden --tool-file mcp_tools/read_file.yaml --config config.yaml --enforce-prior-policy
 
@@ -243,6 +251,14 @@ Attacks are no longer one generic prompt per harm category. Each attack is built
 
 19. **CUDA showcase — removed.** `cuda_showcase/` was off-path for a security paper (it accelerated post-hoc report aggregation) and has been deleted, along with its references in `README.md` and `RUN_PROJECT_INSTRUCTIONS.md`. If the GPU work is worth publishing, it belongs in a separate, narrow HPC paper.
 
+20. **Silent LLM-output fallbacks — fixed and now visible.** `chat_json` never enabled Ollama's JSON mode, so gemma fenced its JSON and qwen3 answered in reasoning prose; every strict `json.loads` failed and each stage silently used a default. In the first live `read_file` run this meant **every score came from the tool-call heuristic, not the LLM judge**, refinement resubmitted the same prompt, and Stage 2/3 findings and annotations were placeholders. Fixes: `chat_json` now always requests JSON mode; all stages parse through `shared/json_utils.parse_llm_json` (fences, prose, arrays); each parse is counted per call site (`LLMProvider.record_parse`) and emitted as `pipeline_health.llm_parse_health` in `run_manifest.json`; every `AttackIteration` records `grade_source` (`llm` / `heuristic_floor` / `heuristic_fallback` / `refusal_fastpath`) summarised as `pipeline_health.grade_sources.llm_judge_share`; Stage 2 findings carry `is_fallback`; the CLI prints a yellow "Fallbacks used" panel. **Open decision:** the grader still returns `max(judge, heuristic)`, so the heuristic can override the judge (e.g. judge 0.0 on a refusal-after-read → reported 0.5; required tools called in order → 0.96 regardless of the judge). Report `llm_judge_share` alongside any success rate until this is resolved.
+
+21. **In-sample policy scoring — held-out evaluation added.** The policy is written from the Stage 1 attacks and the verifier then replays those *same* attacks, so the headline block rate measures fit, not generalisation (live example: `ENF-ATK-001` matched one exact file path). `--heldout-eval` (`Settings.heldout_eval`) generates a second battery with `generate_attacks(exclude_strategies=<calibration strategies>)`, runs it against the unguarded agent, and replays it through the already-built policy. `report.json` labels the original numbers `security_utility_scope: "in_sample"` and adds `heldout_evaluation` (block rate, verdicts, `strategy_disjoint`); held-out records are `HOLD-…`. **Use the held-out block rate as the headline number.** Limitation: at `breadth=1` / EASY intensity only one unused technique remains per category, so larger breadths can exhaust the pool (`strategy_disjoint: false`). Still replay-based, so the attacker cannot adapt to the policy; `scripts/adaptive_attack_eval.py` covers the adaptive case. Strategy-disjoint is not target-disjoint: in the first live run the held-out attacks reused the `/var/log` paths a calibration rule had memorised, so held-out 3/3 still partly reflects memorisation.
+
+22. **Subscript keys matched as values — fixed.** The argument matcher treated every quoted literal as a value, so the key `'path'` in `tool_arguments['path'] == '/etc/shadow'` matched every call that has a `path` parameter and the rule fired on all of them (inflated block rate, over-blocked benign calls with that parameter). `_subscript_key_indices` in `verifier/replay.py` now excludes `[...]` keys from both argument matching and `trigger_has_argument_predicate` (the deny-all guard's check). Reports generated before 2026-09-26 may overstate block rates for rules written in that form; re-score them offline with `scripts/ablation_eval.py gates`.
+
+23. **Threat model and ablation.** `threat.md` is the paper's threat model, including a table of where the evaluation approximates the deployment (post-hoc enforcement, oracle provenance for IFC-002, name-based capabilities, non-adaptive replay, LLM analysis reading attacker-controlled descriptions). `scripts/ablation_eval.py gates <run_dir>` is an offline leave-one-out over policy gates (capability / IFC-001 / IFC-002 / rules, plus a no-policy floor) with first-blocking-gate attribution; `scripts/ablation_eval.py pipeline` runs the attack-side ablation live (full / `--no-refine` / `--baseline-attacks template`), interleaving conditions across repeats. First live result: every gate is redundant with another on `read_file` (no single knockout lowers held-out blocking).
+
 
 ### SAMOS policy verifier (`agent_hardener/verifier/`)
 
@@ -331,3 +347,4 @@ In priority order. Items 1–9 above are addressed in code; the items below are 
 | `benign_dir` | `None` | Benign-suite directory for BPR; set to `benign_tasks_recorded` for agent-recorded trajectories |
 | `n_repeats` | 1 | Seed sweeps per attack cycle (>1 enables variance reporting) |
 | `enforce_prior_policy` | `False` | In harden mode, wrap agent with prior round's policy |
+| `heldout_eval` | `False` | Score the policy on a second battery of unseen strategies (`--heldout-eval`) |

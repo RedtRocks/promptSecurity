@@ -11,7 +11,7 @@ import sys
 import time
 import json
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import typer
 import yaml
@@ -168,6 +168,12 @@ def analyze(
         "--stage1-only",
         help="Generate Stage 1 attacks only, write stage1_attacks.json, and skip attack cycles and Stages 2/3.",
     ),
+    heldout_eval: bool = typer.Option(
+        False,
+        "--heldout-eval",
+        help="After building the policy, score it on a second attack battery that uses "
+        "different strategies (generalisation, not memorisation). ~2x Stage 1 cost.",
+    ),
     version: Optional[bool] = typer.Option(
         None,
         "--version",
@@ -186,7 +192,6 @@ def analyze(
     from agent_hardener.shared.agent_client import AgentClient
     from agent_hardener.stage1.profiler import profile_tool
     from agent_hardener.stage1.attacker import generate_attacks
-    from agent_hardener.stage1.refiner import run_attack_cycle
     from agent_hardener.stage2.analyzer import analyze_attack
     from agent_hardener.stage2.synthesizer import synthesize
     from agent_hardener.stage2.editor import recommend_edits, build_failure_analysis_report
@@ -236,6 +241,8 @@ def analyze(
             settings = settings.model_copy(update={"attack_parallelism": attack_parallelism})
         if agent_endpoint:
             settings = settings.model_copy(update={"agent_endpoint": agent_endpoint})
+        if heldout_eval:
+            settings = settings.model_copy(update={"heldout_eval": True})
     except Exception as exc:
         err_console.print(f"[bold red]ERROR loading settings:[/] {exc}")
         raise typer.Exit(1)
@@ -333,89 +340,11 @@ def analyze(
         return
 
     # Run attack cycles
-    import concurrent.futures
-
-    attack_records = []
-    attack_table = Table(show_header=True, header_style="bold cyan", border_style="dim")
-    attack_table.add_column("Record ID", style="dim", width=26)
-    attack_table.add_column("Objective", width=26)
-    attack_table.add_column("Channel", width=12)
-    attack_table.add_column("Score", justify="right", width=8)
-    attack_table.add_column("Success?", width=12)
-    attack_table.add_column("Iterations", width=10)
-    attack_table.add_column("Refusal?", width=10)
-
-    monitor = AttackMonitor([_objective_label_of(p) for p in adversarial_prompts])
-
-    def _run_single_attack(index_and_prompt: tuple[int, AdversarialPrompt]) -> AttackRecord:
-        i, adv_prompt = index_and_prompt
-        seeds_list = (
-            list(range(1, settings.n_repeats + 1)) if settings.n_repeats > 1 else None
-        )
-        return run_attack_cycle(
-            adversarial_prompt=adv_prompt,
-            agent=agent,
-            llm=llm,
-            max_iterations=settings.max_iterations,
-            refine_patience=settings.refine_patience,
-            refine_min_improvement=settings.refine_min_improvement,
-            success_threshold=settings.attack_success_threshold,
-            record_index=i + 1,
-            seeds=seeds_list,
-            on_progress=monitor.handle_event,
-        )
-
-    workers = max(1, min(len(adversarial_prompts), settings.attack_parallelism))
-    console.print(
-        f"  [dim]Running {len(adversarial_prompts)} attack cycles "
-        f"({workers} worker{'s' if workers != 1 else ''}, "
-        f"up to {settings.max_iterations} refinement iterations each)[/]"
+    attack_records = _run_attack_battery(
+        adversarial_prompts, agent=agent, llm=llm, settings=settings
     )
-    # Live view: each row updates as its cycle progresses, so a long agent or LLM
-    # call shows as an elapsed timer instead of a frozen screen.
-    with Live(
-        get_renderable=monitor.render,
-        console=console,
-        refresh_per_second=8,
-        transient=True,
-    ):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [
-                executor.submit(_run_single_attack, (i, p))
-                for i, p in enumerate(adversarial_prompts)
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    attack_records.append(future.result())
-                except Exception as exc:
-                    err_console.print(f"[bold red]Error running attack:[/] {exc}")
-
-    # Sort attack records back to original order based on Record ID
-    attack_records.sort(key=lambda r: r.record_id)
-
-    for record in attack_records:
-        score_color = "red" if record.final_score > settings.attack_success_threshold else "yellow" if record.final_score > 0 else "green"
-        success_text = f"[red]YES @ P{record.attempt_number_of_success}[/]" if record.attempt_number_of_success is not None else "[green]NO[/]"
-        n_iters = len(record.attack_trajectory)
-        refusal_text = f"[green]P{record.refusal_attempt_number}[/]" if record.refusal_occurred else "[dim]No[/]"
-
-        channel_text = (
-            "[magenta]tool result[/]" if record.delivery_channel == "tool_result"
-            else "[dim]user turn[/]"
-        )
-        attack_table.add_row(
-            record.record_id,
-            (record.misuse_category.value if record.misuse_category
-             else record.harm_category.value),
-            channel_text,
-            f"[{score_color}]{record.final_score:.2f}[/]",
-            success_text,
-            str(n_iters),
-            refusal_text,
-        )
-
     console.print()
-    console.print(attack_table)
+    console.print(_attack_table(attack_records, settings))
 
     n_succeeded = sum(1 for r in attack_records if r.final_score > settings.attack_success_threshold)
     console.print(
@@ -517,6 +446,20 @@ def analyze(
     console.print(f"    Partially mitigated:     [yellow]{cov.attacks_partially_mitigated}[/]")
     console.print(f"    Needs model-level def.:  [cyan]{cov.attacks_requiring_model_level_defense}[/]")
     console.print(f"    Unmitigated:             [{'red' if cov.unmitigated_attacks > 0 else 'green'}]{cov.unmitigated_attacks}[/]")
+    console.print("    [dim](in-sample: scored on the same attacks the policy was built from)[/]")
+
+    heldout: dict[str, Any] | None = None
+    if settings.heldout_eval:
+        console.rule("[bold cyan]HELD-OUT EVALUATION — unseen attack strategies[/]")
+        heldout = _run_heldout_evaluation(
+            tool=tool,
+            profile=profile,
+            llm=llm,
+            agent=agent,
+            settings=settings,
+            calibration_prompts=adversarial_prompts,
+            policy=policy,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # OUTPUT
@@ -533,6 +476,7 @@ def analyze(
             output_dir=output_dir,
             success_threshold=settings.attack_success_threshold,
             benign_dir=settings.benign_dir,
+            heldout=heldout,
         )
         prog.update(t, description="[green]Reports written[/]")
         prog.stop_task(t)
@@ -546,10 +490,14 @@ def analyze(
         attack_records=attack_records,
         adversarial_prompts=adversarial_prompts,
         elapsed_s=time.time() - pipeline_start,
+        llm=llm,
+        findings=stage2_report.vulnerability_findings,
     )
 
     agent.close()
     elapsed = time.time() - pipeline_start
+
+    _warn_on_fallbacks(llm, attack_records)
 
     console.print()
     console.print(Panel(
@@ -783,6 +731,207 @@ def harden(
         )
     finally:
         agent.close()
+
+
+# ── Helper: surface silent fallbacks at the end of a run ─────────────────────
+
+def _warn_on_fallbacks(llm: Any, attack_records: list["AttackRecord"]) -> None:
+    """Print a warning when any stage fell back to a default instead of the LLM.
+
+    These fallbacks used to be invisible: a run whose grader never parsed once
+    looked identical to a healthy one.
+    """
+    from agent_hardener.shared.manifest import summarize_grade_sources
+
+    lines: list[str] = []
+    for site, h in (llm.parse_health() if hasattr(llm, "parse_health") else {}).items():
+        if h["n_failed"]:
+            lines.append(
+                f"{site}: {h['n_failed']}/{h['n_calls']} LLM replies unparseable → default used"
+            )
+    grades = summarize_grade_sources(attack_records)
+    heuristic = sum(
+        n for src, n in grades["counts"].items()
+        if src in {"heuristic_fallback", "heuristic_floor"}
+    )
+    if heuristic:
+        lines.append(
+            f"stage1 scores: {heuristic}/{grades['n_attempts']} attempts scored by the "
+            "tool-call heuristic, not the LLM judge"
+        )
+    if lines:
+        console.print(Panel(
+            "\n".join(f"• {line}" for line in lines)
+            + "\n\n[dim]Details: pipeline_health in run_manifest.json. "
+            "Numbers built on defaults are not evidence for the method.[/]",
+            title="[bold yellow]Fallbacks used in this run",
+            border_style="yellow",
+            padding=(0, 2),
+        ))
+
+
+# ── Helper: run a battery of attack cycles with a live progress view ─────────
+
+def _run_attack_battery(
+    prompts: list["AdversarialPrompt"],
+    *,
+    agent: Any,
+    llm: Any,
+    settings: Any,
+) -> list["AttackRecord"]:
+    """Run one attack cycle per prompt (in parallel) and return records sorted by ID."""
+    import concurrent.futures
+
+    from agent_hardener.stage1.refiner import run_attack_cycle
+
+    attack_records: list[AttackRecord] = []
+    monitor = AttackMonitor([_objective_label_of(p) for p in prompts])
+
+    def _run_single_attack(index_and_prompt: tuple[int, AdversarialPrompt]) -> AttackRecord:
+        i, adv_prompt = index_and_prompt
+        seeds_list = (
+            list(range(1, settings.n_repeats + 1)) if settings.n_repeats > 1 else None
+        )
+        return run_attack_cycle(
+            adversarial_prompt=adv_prompt,
+            agent=agent,
+            llm=llm,
+            max_iterations=settings.max_iterations,
+            refine_patience=settings.refine_patience,
+            refine_min_improvement=settings.refine_min_improvement,
+            success_threshold=settings.attack_success_threshold,
+            record_index=i + 1,
+            seeds=seeds_list,
+            on_progress=monitor.handle_event,
+        )
+
+    workers = max(1, min(len(prompts), settings.attack_parallelism))
+    console.print(
+        f"  [dim]Running {len(prompts)} attack cycles "
+        f"({workers} worker{'s' if workers != 1 else ''}, "
+        f"up to {settings.max_iterations} refinement iterations each)[/]"
+    )
+    # Live view: each row updates as its cycle progresses, so a long agent or LLM
+    # call shows as an elapsed timer instead of a frozen screen.
+    with Live(
+        get_renderable=monitor.render,
+        console=console,
+        refresh_per_second=8,
+        transient=True,
+    ):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(_run_single_attack, (i, p))
+                for i, p in enumerate(prompts)
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    attack_records.append(future.result())
+                except Exception as exc:
+                    err_console.print(f"[bold red]Error running attack:[/] {exc}")
+
+    # Sort attack records back to original order based on Record ID
+    attack_records.sort(key=lambda r: r.record_id)
+    return attack_records
+
+
+def _attack_table(attack_records: list["AttackRecord"], settings: Any) -> Table:
+    attack_table = Table(show_header=True, header_style="bold cyan", border_style="dim")
+    attack_table.add_column("Record ID", style="dim", width=26)
+    attack_table.add_column("Objective", width=26)
+    attack_table.add_column("Channel", width=12)
+    attack_table.add_column("Score", justify="right", width=8)
+    attack_table.add_column("Success?", width=12)
+    attack_table.add_column("Iterations", width=10)
+    attack_table.add_column("Refusal?", width=10)
+
+    for record in attack_records:
+        score_color = "red" if record.final_score > settings.attack_success_threshold else "yellow" if record.final_score > 0 else "green"
+        success_text = f"[red]YES @ P{record.attempt_number_of_success}[/]" if record.attempt_number_of_success is not None else "[green]NO[/]"
+        n_iters = len(record.attack_trajectory)
+        refusal_text = f"[green]P{record.refusal_attempt_number}[/]" if record.refusal_occurred else "[dim]No[/]"
+
+        channel_text = (
+            "[magenta]tool result[/]" if record.delivery_channel == "tool_result"
+            else "[dim]user turn[/]"
+        )
+        attack_table.add_row(
+            record.record_id,
+            (record.misuse_category.value if record.misuse_category
+             else record.harm_category.value),
+            channel_text,
+            f"[{score_color}]{record.final_score:.2f}[/]",
+            success_text,
+            str(n_iters),
+            refusal_text,
+        )
+    return attack_table
+
+
+def _run_heldout_evaluation(
+    *,
+    tool: "MCPToolDefinition",
+    profile: Any,
+    llm: Any,
+    agent: Any,
+    settings: Any,
+    calibration_prompts: list["AdversarialPrompt"],
+    policy: Any,
+) -> dict[str, Any]:
+    """Score the policy on a fresh battery built from strategies it has not seen.
+
+    The policy is written from the Stage 1 attacks, so replaying those same
+    attacks measures memorisation (e.g. a rule that matches one exact file path).
+    This generates a second battery that excludes the calibration strategies,
+    runs it against the UNGUARDED agent like Stage 1, and replays the successful
+    ones through the already-built policy.
+    """
+    from agent_hardener.stage1.attacker import generate_attacks
+    from agent_hardener.verifier import evaluate_security_utility
+
+    calibration_strategies = {p.attack_strategy for p in calibration_prompts}
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as prog:
+        t = prog.add_task("Generating held-out attack battery...", total=None)
+        heldout_prompts = generate_attacks(
+            tool, profile, llm,
+            baseline_mode=settings.baseline_attacks,
+            breadth=settings.attack_breadth,
+            taxonomy=settings.attack_taxonomy,
+            exclude_strategies=calibration_strategies,
+        )
+        prog.update(t, description=f"[green]{len(heldout_prompts)} held-out prompts generated[/]")
+        prog.stop_task(t)
+
+    heldout_strategies = sorted({p.attack_strategy for p in heldout_prompts})
+    overlap = sorted(set(heldout_strategies) & calibration_strategies)
+    console.print(f"  [dim]Held-out strategies:[/] {', '.join(heldout_strategies) or '(none)'}")
+    if overlap:
+        console.print(
+            f"  [yellow]Not fully strategy-disjoint:[/] {', '.join(overlap)} also used in Stage 1 "
+            "(no unused technique left for some categories; lower --attack-breadth)."
+        )
+
+    records = _run_attack_battery(heldout_prompts, agent=agent, llm=llm, settings=settings)
+    records = [
+        r.model_copy(update={"record_id": r.record_id.replace("ATK-", "HOLD-", 1)})
+        for r in records
+    ]
+    console.print()
+    console.print(_attack_table(records, settings))
+
+    su = evaluate_security_utility(records, policy, None, settings.attack_success_threshold)
+    console.print(
+        f"\n  [bold]Held-out:[/] {su.n_successful_attacks}/{len(records)} attacks succeeded "
+        f"against the unguarded agent; policy blocks {su.attacks_blocked}/{su.n_successful_attacks}"
+        + (f" ({su.attack_block_rate:.0%})" if su.n_successful_attacks else " (nothing to block)")
+    )
+    return {
+        "records": records,
+        "prompts": heldout_prompts,
+        "strategies": heldout_strategies,
+        "calibration_strategies": sorted(calibration_strategies),
+        "overlapping_strategies": overlap,
+    }
 
 
 # ── Helper: load tool definition from YAML or JSON ───────────────────────────

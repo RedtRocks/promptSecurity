@@ -11,10 +11,10 @@ was exploited according to the five exploit type taxonomy:
 
 from __future__ import annotations
 
-import json
 import textwrap
 from typing import Any
 
+from agent_hardener.shared.json_utils import note_parse, parse_llm_json_object
 from agent_hardener.shared.llm_provider import LLMProvider
 from agent_hardener.shared.schemas import (
     AttackRecord,
@@ -127,15 +127,15 @@ def analyze_attack(
         temperature=0.1,
     )
 
-    try:
-        data: dict[str, Any] = json.loads(raw)
-    except json.JSONDecodeError:
+    parsed = parse_llm_json_object(raw)
+    note_parse(llm, "stage2.analyze", parsed is not None)
+    is_fallback = parsed is None
+    data: dict[str, Any] = parsed if parsed is not None else {
         # Default to MISSING_BOUNDARY_DECLARATIONS if LLM fails
-        data = {
             "exploit_type": "E",
             "exploited_element": "tool description",
             "description": "Unable to parse LLM analysis response.",
-        }
+    }
 
     exploit_type_map = {
         "A": ExploitType.DESCRIPTION_AMBIGUITY,
@@ -154,6 +154,7 @@ def analyze_attack(
         exploit_type=exploit_type,
         exploited_element=data.get("exploited_element", ""),
         description=data.get("description", ""),
+        is_fallback=is_fallback,
     )
 
 

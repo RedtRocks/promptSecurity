@@ -12,6 +12,7 @@ import json
 import os
 import re
 import textwrap
+from collections.abc import Collection
 from typing import Any
 
 from agent_hardener.shared.llm_provider import LLMProvider
@@ -26,6 +27,8 @@ from agent_hardener.shared.schemas import (
     MISUSE_TO_HARM,
 )
 from agent_hardener.stage1.attack_strategies import (
+    all_injection_strategies,
+    all_strategies,
     AttackStrategy,
     INDIRECT_INJECTION_KEYS,
     injection_strategies,
@@ -227,6 +230,7 @@ def generate_attacks(
     baseline_mode: str = "llm",
     breadth: int = 1,
     taxonomy: str = "misuse",
+    exclude_strategies: Collection[str] | None = None,
 ) -> list[AdversarialPrompt]:
     """Generate adversarial prompts per applicable attack objective.
 
@@ -243,6 +247,11 @@ def generate_attacks(
             objectives a tool can actually be abused for, each mapping to a gate
             the verifier can enforce. "harm" uses the legacy AgentHarm
             `HarmCategory` axis, retained for comparability with prior work.
+        exclude_strategies: Strategy keys to avoid, used to build a held-out
+            battery whose techniques differ from the one the policy was built
+            from. When excluding would leave a category with no technique, that
+            category keeps its usual strategies; callers detect the overlap by
+            comparing ``attack_strategy`` across the two batteries.
 
     Returns a list of AdversarialPrompt objects.
     """
@@ -267,8 +276,16 @@ def generate_attacks(
         # uses the injection techniques rather than the direct escalation ladder.
         if category == ToolMisuseCategory.INJECTION_HIJACK:
             strategies = injection_strategies(breadth)
+            pool = injection_strategies(len(all_injection_strategies()))
         else:
             strategies = strategies_for(attack_intensity, breadth)
+            pool = strategies_for(attack_intensity, len(all_strategies()))
+        if exclude_strategies:
+            # Keep the strongest remaining techniques, matching breadth=1's choice
+            # of the strongest allowed one.
+            remaining = [s for s in pool if s.key not in exclude_strategies]
+            if remaining:
+                strategies = remaining[-max(1, breadth):]
         for strategy in strategies:
             prompt = _generate_one(
                 tool=tool,

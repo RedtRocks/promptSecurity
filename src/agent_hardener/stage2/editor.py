@@ -6,10 +6,9 @@ MODIFY / ADD / DELETE edit recommendations tied to specific attack records.
 
 from __future__ import annotations
 
-import json
 import textwrap
-from typing import Any
 
+from agent_hardener.shared.json_utils import note_parse, parse_llm_json_object
 from agent_hardener.shared.llm_provider import LLMProvider
 from agent_hardener.shared.schemas import (
     AttackRecord,
@@ -163,9 +162,9 @@ def _generate_one_edit(
         temperature=0.1,
     )
 
-    try:
-        data: dict[str, Any] = json.loads(raw)
-    except json.JSONDecodeError:
+    data = parse_llm_json_object(raw)
+    note_parse(llm, "stage2.edit", data is not None)
+    if data is None:
         return None
 
     action_str = data.get("action", "ADD").upper()

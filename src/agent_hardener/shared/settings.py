@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # is NOT a measurement of the generated SAMOS policy. Default off so the
     # reported "agent_run_success_rate" reflects only LLM-driven hardening.
     enable_signature_memory: bool = Field(False)
+    # Held-out evaluation: after the policy is built from the Stage 1 battery,
+    # generate a second battery with DIFFERENT attack strategies, run it against
+    # the unguarded agent, and score the policy on it. The in-sample block rate
+    # measures the policy on the attacks it was written from; this one measures
+    # whether it generalises. Roughly doubles Stage 1 cost.
+    heldout_eval: bool = Field(False)
 
     # Benign-task suites for the security/utility (BPR) measurement. None uses the
     # default search path (./benign_tasks, then the repo root). Point this at

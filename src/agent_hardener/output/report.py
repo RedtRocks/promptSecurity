@@ -35,6 +35,7 @@ def generate_report(
     hardening_history: list[dict[str, Any]] | None = None,
     success_threshold: float = 0.95,
     benign_dir: Path | None = None,
+    heldout: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
     """Generate the JSON report and HTML dashboard.
 
@@ -43,6 +44,11 @@ def generate_report(
 
     benign_dir optionally points at an alternative benign-suite directory (e.g.
     trajectories recorded from a live agent rather than hand-authored ones).
+
+    heldout optionally carries the held-out battery from ``--heldout-eval``
+    (keys: records, strategies, calibration_strategies, overlapping_strategies).
+    Its block rate is reported separately from the in-sample one, which scores
+    the policy on the same attacks it was built from.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +85,13 @@ def generate_report(
             benign_suite.provenance if benign_suite else "none"
         ),
         "hardening_history": hardening_history or [],
+        # `security_utility` above is IN-SAMPLE: the policy is scored on the
+        # attacks it was built from. `heldout_evaluation` is the generalisation
+        # number; it is null when the run did not use --heldout-eval.
+        "security_utility_scope": "in_sample",
+        "heldout_evaluation": _build_heldout_section(
+            heldout, policy, benign_suite, success_threshold
+        ),
     }
 
     json_path = output_dir / "report.json"
@@ -104,6 +117,7 @@ def generate_report(
         policy=policy,
         verifier_verdicts=[v.to_dict() for v in verifier_verdicts],
         security_utility=security_utility,
+        heldout_evaluation=report_data["heldout_evaluation"],
         hardening_showcase=hardening_showcase,
         headline=headline,
         chart_data_json=json.dumps(chart_data),
@@ -113,6 +127,35 @@ def generate_report(
     html_path.write_text(html_content, encoding="utf-8")
 
     return json_path, html_path
+
+
+def _build_heldout_section(
+    heldout: dict[str, Any] | None,
+    policy: SAMOSPolicy,
+    benign_suite: Any,
+    success_threshold: float,
+) -> dict[str, Any] | None:
+    """Score the policy on the held-out battery through the same gates."""
+    if not heldout:
+        return None
+    from agent_hardener.verifier import evaluate_security_utility, verify_all_records
+
+    records: list[AttackRecord] = heldout.get("records", [])
+    security_utility = evaluate_security_utility(
+        records, policy, benign_suite, success_threshold
+    )
+    verdicts = verify_all_records(records, policy, success_threshold)
+    overlap = list(heldout.get("overlapping_strategies", []))
+    return {
+        "n_attacks": len(records),
+        "strategies": list(heldout.get("strategies", [])),
+        "calibration_strategies": list(heldout.get("calibration_strategies", [])),
+        "overlapping_strategies": overlap,
+        "strategy_disjoint": not overlap,
+        "security_utility": json.loads(security_utility.model_dump_json()),
+        "policy_verifier_verdicts": [v.to_dict() for v in verdicts],
+        "attack_records": [json.loads(r.model_dump_json()) for r in records],
+    }
 
 
 def _bootstrap_proportion_ci(

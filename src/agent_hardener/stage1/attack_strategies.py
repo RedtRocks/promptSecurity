@@ -195,6 +195,11 @@ def all_strategies() -> list[AttackStrategy]:
     return list(_ALL)
 
 
+def all_injection_strategies() -> list[AttackStrategy]:
+    """Return every indirect-injection (tool-result channel) strategy."""
+    return list(_INJECTION)
+
+
 def injection_strategies(breadth: int = 1) -> list[AttackStrategy]:
     """Return up to `breadth` indirect-injection techniques (tool-result channel)."""
     return _INJECTION[: max(1, breadth)]

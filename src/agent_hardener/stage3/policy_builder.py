@@ -8,12 +8,12 @@ Builds the complete SAMOS policy:
 
 from __future__ import annotations
 
-import json
 import difflib
 import re
 import textwrap
 from typing import Any
 
+from agent_hardener.shared.json_utils import note_parse, parse_llm_json, parse_llm_json_object
 from agent_hardener.shared.llm_provider import LLMProvider
 from agent_hardener.shared.schemas import (
     AttackRecord,
@@ -247,9 +247,9 @@ def _build_taint_rules(
         temperature=0.0,
     )
 
-    try:
-        data: dict[str, Any] = json.loads(raw)
-    except json.JSONDecodeError:
+    data = parse_llm_json_object(raw)
+    note_parse(llm, "stage3.taint_rules", data is not None)
+    if data is None:
         # Conservative default: session starts high, block all high→low flows
         return _conservative_taint_rules(confidentiality, records)
 
@@ -485,12 +485,13 @@ def _build_enforcement_rules(
             temperature=0.0,
         )
 
-        try:
-            items: list[dict[str, Any]] = json.loads(raw)
-            if not isinstance(items, list):
-                items = [items]
-        except (json.JSONDecodeError, TypeError):
-            items = []
+        parsed = parse_llm_json(raw)
+        note_parse(llm, "stage3.enforcement_rules", parsed is not None)
+        if isinstance(parsed, dict):
+            # JSON mode forces an object; accept {"rules": [...]}-style wrappers.
+            wrapped = next((v for v in parsed.values() if isinstance(v, list)), None)
+            parsed = wrapped if wrapped is not None else [parsed]
+        items: list[dict[str, Any]] = [i for i in (parsed or []) if isinstance(i, dict)]
 
         for item in items:
             action_str = item.get("action", "AUDIT").upper()

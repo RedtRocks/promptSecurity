@@ -402,6 +402,7 @@ def _argument_conditions_satisfied(
     blob = _serialize_call(call)
     known_lower = {t.lower() for t in known_tool_names}
     masked_lower = masked.lower()
+    key_idxs = _subscript_key_indices(masked_lower)
 
     saw_arg_predicate = False
     disjunct_results: list[bool] = []
@@ -412,7 +413,9 @@ def _argument_conditions_satisfied(
             arg_lits = [
                 literals[i]
                 for i in idxs
-                if literals[i].strip() and literals[i].lower() not in known_lower
+                if literals[i].strip()
+                and literals[i].lower() not in known_lower
+                and i not in key_idxs
             ]
             if not arg_lits:
                 continue  # tool-identity or non-literal predicate -> assume satisfied
@@ -436,9 +439,23 @@ def trigger_has_argument_predicate(trigger: str, known_tool_names: set[str]) -> 
     names (or none) fires on every call under the name-only fallback — that's the
     degenerate deny-all case, which the guard downgrades.
     """
-    literals, _ = _mask_literals(trigger)
+    literals, masked = _mask_literals(trigger)
     known_lower = {t.lower() for t in known_tool_names}
-    return any(lit.strip() and lit.lower() not in known_lower for lit in literals)
+    key_idxs = _subscript_key_indices(masked.lower())
+    return any(
+        lit.strip() and lit.lower() not in known_lower and i not in key_idxs
+        for i, lit in enumerate(literals)
+    )
+
+
+def _subscript_key_indices(masked: str) -> set[int]:
+    """Indices of literals used as subscript keys, e.g. ``'path'`` in ``args['path']``.
+
+    A key names a parameter; it is not a value to look for. Every call that has
+    that parameter serializes the key, so treating it as a value made a rule like
+    ``tool_arguments['path'] == '/etc/shadow'`` fire on every call with a path.
+    """
+    return {int(i) for i in re.findall(r"\[\s*__lit(\d+)__\s*\]", masked, flags=re.IGNORECASE)}
 
 
 def _mask_literals(trigger: str) -> tuple[list[str], str]:

@@ -10,6 +10,7 @@ import json
 import textwrap
 from typing import Any
 
+from agent_hardener.shared.json_utils import note_parse, parse_llm_json_object
 from agent_hardener.shared.llm_provider import LLMProvider
 from agent_hardener.shared.schemas import (
     AttackRecord,
@@ -180,9 +181,9 @@ def annotate(
         temperature=0.0,
     )
 
-    try:
-        data: dict[str, Any] = json.loads(raw)
-    except json.JSONDecodeError:
+    data = parse_llm_json_object(raw)
+    note_parse(llm, "stage3.annotate", data is not None)
+    if data is None:
         # Conservative failsafe: assign high/high and block all capabilities
         return _conservative_defaults(profile)
 

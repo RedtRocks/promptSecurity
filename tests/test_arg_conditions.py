@@ -76,3 +76,27 @@ class TestTriggerHasArgumentPredicate:
         assert not trigger_has_argument_predicate(
             "tool == 'read_file' AND session.taint == high", {"read_file"}
         )
+
+
+class TestSubscriptKeys:
+    """A quoted subscript key names a parameter; it is not a value to match."""
+
+    T = "tool_invocation('read_file') AND tool_arguments['path'] == '/etc/shadow'"
+
+    def test_key_alone_does_not_satisfy_the_predicate(self):
+        # 'path' appears in every read_file call; only the value may decide.
+        assert not _argument_conditions_satisfied(
+            self.T, _call("read_file", path="/tmp/notes"), {"read_file"}
+        )
+
+    def test_matching_value_still_fires(self):
+        assert _argument_conditions_satisfied(
+            self.T, _call("read_file", path="/etc/shadow"), {"read_file"}
+        )
+
+    def test_key_only_trigger_is_not_discriminating(self):
+        # No value literal left: the deny-all guard must treat it as name-only.
+        assert not trigger_has_argument_predicate(
+            "tool_invocation('read_file') AND tool_arguments['path']", {"read_file"}
+        )
+        assert trigger_has_argument_predicate(self.T, {"read_file"})
