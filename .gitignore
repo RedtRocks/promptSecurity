@@ -55,3 +55,7 @@ Thumbs.db
 *.log
 # Gateway per-session taint store (runtime state, created by agent-hardener gateway)
 gateway_sessions.db
+
+# Capstone evaluation documents: kept local, not published
+eval files/
+CODE_REVIEW_2026-07-15.md
