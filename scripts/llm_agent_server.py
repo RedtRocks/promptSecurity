@@ -94,6 +94,11 @@ app = FastAPI(title="LLM Agent Server")
 # ── LLM provider (lazy singleton) ─────────────────────────────────────────────
 
 _llm: LLMProvider | None = None
+# Conversation history per caller-supplied session_id, for multi-request
+# sessions. Requests without a session_id are independent (fresh history), which
+# is what the attack pipeline relies on: sharing one default session would leak
+# every attack's history into the next and grow the context without bound.
+active_sessions: dict[str, list[dict[str, str]]] = {}
 
 
 def _get_llm() -> LLMProvider:
@@ -254,9 +259,8 @@ def _tool_schemas_text() -> str:
 
 
 def _plan(
-    prompt: str,
     system_prompt: str,
-    history: list[dict[str, str]] | None = None,
+    history: list[dict[str, str]],
 ) -> dict[str, Any]:
     """Ask the LLM for the next step (or a refusal). Returns a parsed plan dict.
 
@@ -278,9 +282,8 @@ def _plan(
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system},
-        {"role": "user", "content": prompt},
     ]
-    messages.extend(history or [])
+    messages.extend(history)
 
     llm = _get_llm()
     raw = llm.chat_json(
@@ -333,6 +336,8 @@ class RunRequest(BaseModel):
     injections: list[ToolInjection] = []
     # Bounded step budget for the ReAct loop; None → server default.
     max_steps: int | None = None
+    # Optional: continue an earlier conversation. None = independent request.
+    session_id: str | None = None
 
 
 # Default step budget. Bounded because each step is an LLM call, and an
@@ -369,7 +374,10 @@ async def run_agent(req: RunRequest) -> dict[str, Any]:
     max_steps = max(1, req.max_steps or _DEFAULT_MAX_STEPS)
     injections = list(req.injections)
 
-    history: list[dict[str, str]] = []
+    # Continue the session's conversation if one was named; otherwise start fresh.
+    history = list(active_sessions.get(req.session_id, [])) if req.session_id else []
+    history.append({"role": "user", "content": req.prompt})
+
     tool_calls: list[dict[str, Any]] = []
     assistant_messages: list[str] = []
     injections_fired: list[str] = []
@@ -382,7 +390,7 @@ async def run_agent(req: RunRequest) -> dict[str, Any]:
 
     for _ in range(max_steps):
         steps_used += 1
-        plan = _plan(req.prompt, req.system_prompt, history)
+        plan = _plan(req.system_prompt, history)
 
         if bool(plan.get("refusal", False)):
             refusal = True
@@ -449,6 +457,10 @@ async def run_agent(req: RunRequest) -> dict[str, Any]:
 
     if not assistant_messages:
         assistant_messages.append("I can't help with that." if refusal else "Working on it.")
+
+    # Save session state at the end of the request
+    if req.session_id:
+        active_sessions[req.session_id] = history
 
     return {
         "prompt": req.prompt,

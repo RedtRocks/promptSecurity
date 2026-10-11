@@ -18,7 +18,7 @@ Use it by passing it where `AgentClient` is expected. The interface is identical
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 from agent_hardener.shared.schemas import (
     AgentTrajectory,
@@ -59,10 +59,17 @@ class PolicyEnforcingAgentClient:
         self._rule_index = _index_rules_by_tool_name(policy)
         # Track per-prompt enforcement actions so the report can show what fired.
         self.last_enforcement_log: list[dict[str, Any]] = []
+        # Session taint after the last run; the gateway persists it per session.
+        self.last_final_taint: str = policy.session_taint_rules.initial_session_taint.value
 
-    def run_task(self, prompt: str) -> AgentTrajectory:
+    def run_task(self, prompt: str, starting_taint: Optional[str] = None) -> AgentTrajectory:
+        """Run the inner agent and enforce the policy.
+
+        ``starting_taint`` carries a session's taint over from an earlier request
+        (see gateway_server); None starts from the policy's initial taint.
+        """
         trajectory = self._inner.run_task(prompt)
-        return self._enforce(trajectory)
+        return self._enforce(trajectory, starting_taint=starting_taint)
 
     def set_tool_context(self, tool: MCPToolDefinition) -> None:
         """Forward tool context to the wrapped agent (LLM agents use it)."""
@@ -81,14 +88,25 @@ class PolicyEnforcingAgentClient:
 
     # ── enforcement ──────────────────────────────────────────────────────────
 
-    def _enforce(self, trajectory: AgentTrajectory) -> AgentTrajectory:
+    def _enforce(self, trajectory: AgentTrajectory, starting_taint: Optional[str] = None) -> AgentTrajectory:
         """Apply the policy's gates to the inner agent's trajectory."""
         self.last_enforcement_log = []
+
+        # A session continued from an earlier request starts at the taint it
+        # ended with, so data read then still counts as read now.
+        current_taint = self._policy.session_taint_rules.initial_session_taint
+        if starting_taint:
+            try:
+                current_taint = TaintLevel(starting_taint)
+            except ValueError:
+                pass
+        self.last_final_taint = current_taint.value
+
         if not trajectory.tool_calls:
             return trajectory
 
         new_calls: list[ToolCall] = []
-        current_taint = self._policy.session_taint_rules.initial_session_taint
+        
         taint_monotonic = self._policy.gateway_enforcement.taint_is_monotonic
         blocked = False
         block_reason = ""
@@ -110,6 +128,7 @@ class PolicyEnforcingAgentClient:
                 self.last_enforcement_log.append({
                     "step": step_idx, "tool": call.tool_name,
                     "gate": "capability", "rule": capability, "action": "BLOCK", "reason": reason,
+                    "final_taint": current_taint.value,
                 })
                 new_calls.append(call.model_copy(update={
                     "success": False, "failure_reason": reason, "response": None,
@@ -126,6 +145,7 @@ class PolicyEnforcingAgentClient:
                         "step": step_idx, "tool": call.tool_name,
                         "gate": "taint_upgrade", "rule": "READ-HIGH",
                         "action": "UPGRADE_TAINT", "reason": "session upgraded to HIGH",
+                        "final_taint": current_taint.value,
                     })
 
             if (
@@ -137,6 +157,7 @@ class PolicyEnforcingAgentClient:
                     "step": step_idx, "tool": call.tool_name,
                     "gate": "taint", "rule": "IFC-001-HIGH-TO-LOW",
                     "action": "BLOCK", "reason": reason,
+                    "final_taint": current_taint.value,
                 })
                 new_calls.append(call.model_copy(update={
                     "success": False, "failure_reason": reason, "response": None,
@@ -158,6 +179,7 @@ class PolicyEnforcingAgentClient:
                     "step": step_idx, "tool": call.tool_name,
                     "gate": "enforcement", "rule": rule_id,
                     "action": action.value, "reason": "logged but not blocking",
+                    "final_taint": current_taint.value,
                 })
 
             if block_rule_id is not None:
@@ -166,6 +188,7 @@ class PolicyEnforcingAgentClient:
                     "step": step_idx, "tool": call.tool_name,
                     "gate": "enforcement", "rule": block_rule_id,
                     "action": "BLOCK", "reason": reason,
+                    "final_taint": current_taint.value,
                 })
                 new_calls.append(call.model_copy(update={
                     "success": False, "failure_reason": reason, "response": None,
@@ -176,6 +199,8 @@ class PolicyEnforcingAgentClient:
 
             # Pass-through
             new_calls.append(call)
+
+        self.last_final_taint = current_taint.value
 
         # If we blocked, mark the trajectory as refused-by-policy. Otherwise
         # leave the inner agent's refusal flags intact.

@@ -22,6 +22,7 @@ graceful shutdown).
 """
 
 import json
+import sqlite3
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -34,6 +35,49 @@ from agent_hardener.shared.agent_client import AgentClient
 from agent_hardener.shared.schemas import SAMOSPolicy
 from agent_hardener.shared.settings import Settings
 from agent_hardener.verifier import PolicyEnforcingAgentClient
+
+# ── Stateful taint persistence ───────────────────────────────────────────────
+# Each /run is a separate HTTP request, so without persistence the gateway would
+# forget a session's confidentiality taint between requests: an agent could read
+# a secret in one request and exfiltrate it in the next (a "sleeper" attack).
+# The gateway therefore stores the taint per client-supplied ``session_id``.
+# Requests without a session_id stay stateless, exactly as before; defaulting
+# them to a shared session would let one client's reads taint every other client.
+
+DB_PATH = "gateway_sessions.db"
+
+
+def init_db(db_path: "str | Path" = DB_PATH) -> None:
+    """Create the session-taint table if it does not exist."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                current_taint TEXT DEFAULT 'low'
+            )
+            """
+        )
+
+
+def load_session_taint(db_path: "str | Path", session_id: str) -> Optional[str]:
+    """Return the persisted taint for ``session_id``, or None for a new session."""
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT current_taint FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def save_session_taint(db_path: "str | Path", session_id: str, taint: str) -> None:
+    """Persist ``taint`` as the current taint of ``session_id``."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO sessions (session_id, current_taint) VALUES (?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET current_taint=excluded.current_taint",
+            (session_id, taint),
+        )
+
 
 # FastAPI is an optional dependency. Import at module level (not inside the
 # factory) so runtime type-hint resolution works for FastAPI's request parser;
@@ -98,11 +142,14 @@ def create_app(
     inner_agent: Any = None,
     audit_log_path: Optional[Path] = None,
     audit_ring_size: int = 500,
+    session_db_path: "Optional[str | Path]" = None,
 ) -> "FastAPI":
     """Build the FastAPI gateway app.
 
     Exactly one of `policy` or `policy_path` must be provided.
     Exactly one of `agent_endpoint` or `inner_agent` must be provided.
+    `session_db_path` is the SQLite file holding per-session taint
+    (default: ``gateway_sessions.db`` in the working directory).
     """
     if not _FASTAPI_AVAILABLE:
         raise ImportError(
@@ -126,6 +173,9 @@ def create_app(
         inner_agent = AgentClient(settings)
 
     enforcer = PolicyEnforcingAgentClient(inner_agent, policy)
+
+    session_db = session_db_path if session_db_path is not None else DB_PATH
+    init_db(session_db)
 
     # ── Audit ring + optional JSONL sink ──────────────────────────────────────
     audit_ring: deque[dict[str, Any]] = deque(maxlen=audit_ring_size)
@@ -190,7 +240,9 @@ def create_app(
     async def run(request: Request) -> JSONResponse:
         """Forward a prompt to the inner agent and enforce the policy on the result.
 
-        Accepts the same body shape as the protected agent: ``{"prompt": "..."}``.
+        Accepts the same body shape as the protected agent: ``{"prompt": "..."}``,
+        plus an optional ``session_id``. With a session_id, the session's taint
+        is carried over from earlier requests and saved afterwards.
         Returns the AgentTrajectory JSON, augmented with ``enforcement_log`` so
         clients can see which gates fired without having to call ``/audit``.
         """
@@ -203,9 +255,14 @@ def create_app(
         if not isinstance(prompt, str) or not prompt.strip():
             raise HTTPException(status_code=400, detail="Body must contain a non-empty 'prompt' string.")
 
+        session_id = body.get("session_id")
+        if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
+            raise HTTPException(status_code=400, detail="'session_id' must be a non-empty string.")
+        persisted_taint = load_session_taint(session_db, session_id) if session_id else None
+
         t0 = time.time()
         try:
-            trajectory = enforcer.run_task(prompt)
+            trajectory = enforcer.run_task(prompt, starting_taint=persisted_taint)
         except Exception as exc:
             _record_audit({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -218,6 +275,10 @@ def create_app(
         log = list(enforcer.last_enforcement_log)
         blocked = any(e.get("action") == "BLOCK" for e in log)
 
+        final_taint = enforcer.last_final_taint
+        if session_id:
+            save_session_taint(session_db, session_id, final_taint)
+
         audit_event = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "prompt_preview": prompt[:200],
@@ -226,12 +287,16 @@ def create_app(
             "blocked": blocked,
             "enforcement_log": log,
             "elapsed_ms": int((time.time() - t0) * 1000),
+            "session_id": session_id,
+            "final_taint": final_taint,
         }
         _record_audit(audit_event)
 
         payload = json.loads(trajectory.model_dump_json())
         payload["enforcement_log"] = log
         payload["policy_tool"] = policy.tool_name
+        payload["session_id"] = session_id
+        payload["final_taint"] = final_taint
         return JSONResponse(payload)
 
     @app.post("/tools/list")
@@ -254,5 +319,6 @@ def create_app(
     app.state.policy = policy
     app.state.enforcer = enforcer
     app.state.audit_ring = audit_ring
+    app.state.session_db = session_db
 
     return app

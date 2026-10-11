@@ -53,3 +53,5 @@ TEST_PROMPTS_CLI.md
 .DS_Store
 Thumbs.db
 *.log
+# Gateway per-session taint store (runtime state, created by agent-hardener gateway)
+gateway_sessions.db
